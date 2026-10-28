@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { Navbar } from '../components/Navbar';
 import { StaleDataIndicator } from '../components/StaleDataIndicator';
 import { RegimeAlertsBanner, RegimeAlert } from '../components/RegimeAlertsBanner';
@@ -9,13 +9,14 @@ import { MarketTable } from '../components/MarketTable';
 import { MetricCard } from '../components/MetricCard';
 import { ScanSnapshot, ScannedMarketData } from '../lib/storage/db';
 import { RangeType } from '../lib/analytics/ranges';
-import { Zap, TrendingUp, ShieldAlert, Award } from 'lucide-react';
+import { Clock, RefreshCw, AlertCircle } from 'lucide-react';
 
 export default function HomePage() {
   const [snapshot, setSnapshot] = useState<ScanSnapshot | null>(null);
   const [status, setStatus] = useState<any>(null);
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
+  const [scanMessage, setScanMessage] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
 
   // Filters state
@@ -26,18 +27,25 @@ export default function HomePage() {
   const [selectedRangeType, setSelectedRangeType] = useState<RangeType>('normal');
   const [feePreset, setFeePreset] = useState<'default' | 'vip'>('default');
   const [onlyInRange, setOnlyInRange] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'eligible' | 'excluded' | 'insufficient_data'>('eligible');
+  const [activeTab, setActiveTab] = useState<'eligible' | 'pending_scan' | 'excluded' | 'insufficient_data'>('eligible');
+
+  const pollingRef = useRef<NodeJS.Timeout | null>(null);
 
   const fetchScanData = useCallback(async () => {
     try {
       const res = await fetch('/api/scan');
       const data = await res.json();
-      if (data.success && data.snapshot) {
-        setSnapshot(data.snapshot);
-        setStatus(data.status);
+      if (data.success) {
+        if (data.snapshot) {
+          setSnapshot(data.snapshot);
+        }
+        if (data.status) {
+          setStatus(data.status);
+        }
         setError(null);
-      } else if (data.status) {
-        setStatus(data.status);
+        return data;
+      } else {
+        if (data.error) setError(data.error);
       }
     } catch (err: any) {
       console.error('Failed to load scan data:', err);
@@ -45,30 +53,103 @@ export default function HomePage() {
     } finally {
       setLoading(false);
     }
+    return null;
   }, []);
 
   const handleManualScan = async () => {
+    if (refreshing) return;
     setRefreshing(true);
+    setScanMessage('Initiating universe scan...');
+    setError(null);
+
     try {
-      await fetch('/api/scan', {
+      const res = await fetch('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ force: true }),
       });
-      // Poll after 2s
-      setTimeout(fetchScanData, 2000);
-    } catch (err) {
+      const data = await res.json();
+
+      if (!data.success) {
+        setError(data.error || 'Failed to start scan.');
+        setRefreshing(false);
+        return;
+      }
+
+      const scanId = data.scanId;
+      setScanMessage('Discovering DEX markets and fetching candles...');
+
+      // Clear any prior poll
+      if (pollingRef.current) clearInterval(pollingRef.current);
+
+      let attempts = 0;
+      const maxAttempts = 35; // ~70 seconds timeout
+
+      pollingRef.current = setInterval(async () => {
+        attempts++;
+        try {
+          const checkRes = await fetch('/api/scan');
+          const checkData = await checkRes.json();
+
+          if (checkData.success) {
+            const activeJob = checkData.activeJob;
+            const currentSnapshot = checkData.snapshot;
+
+            if (activeJob) {
+              if (activeJob.progress?.phase) {
+                setScanMessage(activeJob.progress.phase);
+              }
+
+              if (activeJob.status === 'completed' || (currentSnapshot && currentSnapshot.id === scanId)) {
+                if (pollingRef.current) clearInterval(pollingRef.current);
+                setSnapshot(currentSnapshot);
+                setStatus(checkData.status);
+                setRefreshing(false);
+                setScanMessage('');
+                return;
+              } else if (activeJob.status === 'failed') {
+                if (pollingRef.current) clearInterval(pollingRef.current);
+                setError(activeJob.error || 'Scan job reported a failure.');
+                setRefreshing(false);
+                setScanMessage('');
+                return;
+              }
+            } else if (currentSnapshot && currentSnapshot.timestamp > (snapshot?.timestamp || 0)) {
+              if (pollingRef.current) clearInterval(pollingRef.current);
+              setSnapshot(currentSnapshot);
+              setStatus(checkData.status);
+              setRefreshing(false);
+              setScanMessage('');
+              return;
+            }
+          }
+        } catch (pollErr) {
+          console.warn('Polling check error:', pollErr);
+        }
+
+        if (attempts >= maxAttempts) {
+          if (pollingRef.current) clearInterval(pollingRef.current);
+          setRefreshing(false);
+          setScanMessage('');
+          fetchScanData();
+        }
+      }, 2000);
+    } catch (err: any) {
       console.error('Scan trigger error:', err);
-    } finally {
-      setTimeout(() => setRefreshing(false), 2000);
+      setError(err?.message || 'Failed to trigger scan');
+      setRefreshing(false);
+      setScanMessage('');
     }
   };
 
   useEffect(() => {
     fetchScanData();
-    // Auto-refresh displayed stats every 60 seconds without heavy backend exchange re-scan
+    // Auto-refresh displayed stats every 60 seconds
     const interval = setInterval(fetchScanData, 60000);
-    return () => clearInterval(interval);
+    return () => {
+      clearInterval(interval);
+      if (pollingRef.current) clearInterval(pollingRef.current);
+    };
   }, [fetchScanData]);
 
   // Extract DEXes
@@ -79,6 +160,7 @@ export default function HomePage() {
 
   // Group markets into tabs
   const eligibleMarkets = allMarkets.filter((m) => m.status === 'eligible');
+  const pendingMarkets = allMarkets.filter((m) => m.status === 'pending_scan');
   const excludedMarkets = allMarkets.filter((m) => m.status === 'excluded');
   const insufficientMarkets = allMarkets.filter((m) => m.status === 'insufficient_data' || m.status === 'error');
 
@@ -86,6 +168,8 @@ export default function HomePage() {
   const targetMarkets =
     activeTab === 'eligible'
       ? eligibleMarkets
+      : activeTab === 'pending_scan'
+      ? pendingMarkets
       : activeTab === 'excluded'
       ? excludedMarkets
       : insufficientMarkets;
@@ -164,6 +248,19 @@ export default function HomePage() {
       />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 w-full space-y-6 flex-1">
+        {/* Progress Notification Bar during scanning */}
+        {refreshing && (
+          <div className="flex items-center justify-between p-3 rounded-xl bg-sky-950/60 border border-sky-800 text-sky-200 text-xs animate-pulse">
+            <div className="flex items-center space-x-2">
+              <RefreshCw className="w-4 h-4 animate-spin text-sky-400" />
+              <span className="font-medium">
+                {scanMessage || 'Scanning Hyperliquid perpetual universe & HIP-3 DEXes...'}
+              </span>
+            </div>
+            <span className="text-sky-400 text-[11px]">Serverless job active</span>
+          </div>
+        )}
+
         {/* Freshness Banner */}
         <StaleDataIndicator
           lastUpdated={snapshot?.timestamp}
@@ -182,7 +279,7 @@ export default function HomePage() {
           <MetricCard
             title="TOP OPPORTUNITY"
             value={topOpportunity ? `${topOpportunity.market.dex.toUpperCase()}:${topOpportunity.market.baseAsset}` : 'N/A'}
-            subtitle={topOpportunity ? `Score: ${topOpportunity.score.combinedScore}/100 • Daily: +${topOpportunity.backtest7d?.netDailyReturnPct.toFixed(2) || '0.00'}%` : 'Scanning universe...'}
+            subtitle={topOpportunity ? `Score: ${topOpportunity.score.combinedScore}/100 • Daily: +${topOpportunity.backtest7d?.netDailyReturnPct.toFixed(2) || '0.00'}%` : snapshot ? 'No eligible markets meet criteria' : 'Waiting for scan...'}
             badge={topOpportunity ? 'Rank #1' : undefined}
             badgeColor="emerald"
           />
@@ -229,10 +326,10 @@ export default function HomePage() {
         />
 
         {/* Tab Navigation */}
-        <div className="flex items-center space-x-2 border-b border-dark-750 pb-2">
+        <div className="flex items-center space-x-2 border-b border-dark-750 pb-2 overflow-x-auto">
           <button
             onClick={() => setActiveTab('eligible')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors flex items-center space-x-2 ${
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors flex items-center space-x-2 whitespace-nowrap ${
               activeTab === 'eligible'
                 ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
                 : 'text-slate-400 hover:text-slate-200'
@@ -245,8 +342,22 @@ export default function HomePage() {
           </button>
 
           <button
+            onClick={() => setActiveTab('pending_scan')}
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors flex items-center space-x-2 whitespace-nowrap ${
+              activeTab === 'pending_scan'
+                ? 'bg-sky-500/10 text-sky-400 border border-sky-500/30'
+                : 'text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            <span>Queued for Scan</span>
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-dark-750 text-slate-300">
+              {pendingMarkets.length}
+            </span>
+          </button>
+
+          <button
             onClick={() => setActiveTab('excluded')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors flex items-center space-x-2 ${
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors flex items-center space-x-2 whitespace-nowrap ${
               activeTab === 'excluded'
                 ? 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
                 : 'text-slate-400 hover:text-slate-200'
@@ -260,7 +371,7 @@ export default function HomePage() {
 
           <button
             onClick={() => setActiveTab('insufficient_data')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors flex items-center space-x-2 ${
+            className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors flex items-center space-x-2 whitespace-nowrap ${
               activeTab === 'insufficient_data'
                 ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
                 : 'text-slate-400 hover:text-slate-200'
@@ -273,12 +384,34 @@ export default function HomePage() {
           </button>
         </div>
 
-        {/* Main Markets Table */}
-        {loading && !snapshot ? (
+        {/* Main Content Area */}
+        {loading ? (
           <div className="text-center py-20 bg-dark-850 rounded-xl border border-dark-700">
             <div className="w-8 h-8 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-            <p className="text-slate-300 font-medium">Scanning Hyperliquid universe...</p>
-            <p className="text-xs text-slate-500 mt-1">Discovering builder DEXes and loading historical candles...</p>
+            <p className="text-slate-300 font-medium">Connecting to persistent storage...</p>
+            <p className="text-xs text-slate-500 mt-1">Retrieving latest scan snapshot...</p>
+          </div>
+        ) : !snapshot ? (
+          /* Empty Storage State: Mandated Priority 1 requirement */
+          <div className="text-center py-20 px-4 bg-dark-850 rounded-xl border border-dark-700">
+            <Clock className="w-12 h-12 text-emerald-400 mx-auto mb-4 animate-pulse opacity-80" />
+            <h3 className="text-lg font-bold text-white">Waiting for first successful scan</h3>
+            <p className="text-sm text-slate-400 mt-2 max-w-lg mx-auto">
+              No scan snapshot was found in persistent storage yet. Click below to start the initial scan across Hyperliquid and all HIP-3 builder DEXes.
+            </p>
+            <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-3">
+              <button
+                onClick={handleManualScan}
+                disabled={refreshing}
+                className="inline-flex items-center space-x-2 px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm transition-all active:scale-95 disabled:opacity-50"
+              >
+                <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+                <span>{refreshing ? 'Scanning Hyperliquid Universe...' : 'Trigger First Scan Now'}</span>
+              </button>
+            </div>
+            <p className="text-xs text-slate-500 mt-4">
+              Automatic scans execute every 5 minutes via scheduled Vercel cron.
+            </p>
           </div>
         ) : (
           <MarketTable

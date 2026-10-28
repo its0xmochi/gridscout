@@ -1,19 +1,21 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { MarketScanner } from '../lib/storage/scanner';
 import { ScanDatabase } from '../lib/storage/db';
-import { ExchangeAdapter, Market, Candle, OrderBook } from '../lib/adapters/types';
+import { FileStorageAdapter } from '../lib/storage/storage-adapter';
+import { ExchangeAdapter, Market, Candle } from '../lib/adapters/types';
 import fs from 'fs';
 import path from 'path';
 
 describe('MarketScanner and ScanDatabase', () => {
   const testDataDir = path.resolve(__dirname, 'test-data');
+  const testFilePath = path.join(testDataDir, 'scans.json');
   let testDb: ScanDatabase;
 
   beforeEach(() => {
     if (fs.existsSync(testDataDir)) {
       fs.rmSync(testDataDir, { recursive: true, force: true });
     }
-    testDb = new ScanDatabase(testDataDir);
+    testDb = new ScanDatabase(new FileStorageAdapter(testFilePath));
   });
 
   afterEach(() => {
@@ -160,6 +162,7 @@ describe('MarketScanner and ScanDatabase', () => {
 
     expect(goodMarket).toBeDefined();
     expect(badMarket).toBeDefined();
+    expect(badMarket?.status === 'error' || badMarket?.status === 'insufficient_data').toBe(true);
   });
 
   it('persists completed snapshot to disk and reloads on restart', async () => {
@@ -190,9 +193,9 @@ describe('MarketScanner and ScanDatabase', () => {
     const scanner = new MarketScanner(adapter, testDb);
     const snapshot = await scanner.runScan(true);
 
-    // New DB instance simulating app restart
-    const reloadedDb = new ScanDatabase(testDataDir);
-    const loadedSnapshot = reloadedDb.getLatestScan();
+    // New DB instance simulating app restart reading from storage
+    const reloadedDb = new ScanDatabase(new FileStorageAdapter(testFilePath));
+    const loadedSnapshot = await reloadedDb.getLatestScan();
 
     expect(loadedSnapshot).toBeDefined();
     expect(loadedSnapshot?.id).toBe(snapshot.id);

@@ -1,12 +1,12 @@
-import fs from 'fs';
-import path from 'path';
-import os from 'os';
 import { MarketScoreResult } from '../analytics/scoring';
 import { GridConfig, GridRange } from '../analytics/ranges';
 import { BacktestResult } from '../backtest/types';
 import { Market } from '../adapters/types';
-// Compile-time bundled seed snapshot to guarantee 100% availability in serverless environments
-import initialSeedSnapshot from '../../data/scans.json';
+import {
+  StorageAdapter,
+  ScanJob,
+  createDefaultStorageAdapter,
+} from './storage-adapter';
 
 export interface ScannedMarketData {
   market: Market;
@@ -21,7 +21,7 @@ export interface ScannedMarketData {
   gridConfigSafe: GridConfig;
   backtest3d?: BacktestResult;
   backtest7d?: BacktestResult;
-  status: 'eligible' | 'excluded' | 'insufficient_data' | 'error';
+  status: 'eligible' | 'excluded' | 'insufficient_data' | 'pending_scan' | 'error';
   errorDetails?: string;
   lastUpdated: number;
 }
@@ -34,6 +34,7 @@ export interface ScanSnapshot {
   eligibleCount: number;
   excludedCount: number;
   insufficientDataCount: number;
+  pendingScanCount?: number;
   errorCount: number;
   dexesCovered: string[];
   markets: ScannedMarketData[];
@@ -43,80 +44,104 @@ export interface ScanSnapshot {
 }
 
 export class ScanDatabase {
-  private dataDir: string;
-  private dbFilePath: string;
+  private adapter: StorageAdapter;
   private cachedSnapshot: ScanSnapshot | null = null;
 
-  constructor(baseDir: string = process.cwd()) {
-    const isServerless =
-      process.env.VERCEL === '1' || process.env.AWS_LAMBDA_FUNCTION_NAME !== undefined;
-
-    if (isServerless) {
-      // In serverless environments (Vercel/AWS Lambda), /tmp is the only writable directory
-      this.dataDir = path.join(os.tmpdir(), 'gridscout-data');
-      this.dbFilePath = path.join(this.dataDir, 'scans.json');
-    } else {
-      this.dataDir = path.resolve(baseDir, 'data');
-      this.dbFilePath = path.join(this.dataDir, 'scans.json');
-    }
-
-    this.ensureDirectory();
+  constructor(adapter?: StorageAdapter) {
+    this.adapter = adapter ?? createDefaultStorageAdapter();
   }
 
-  private ensureDirectory() {
-    try {
-      if (!fs.existsSync(this.dataDir)) {
-        fs.mkdirSync(this.dataDir, { recursive: true });
-      }
-    } catch (err) {
-      // Ignore directory creation failure in read-only environments
-    }
+  public getAdapterName(): string {
+    return this.adapter.name;
   }
 
-  public getLatestScan(): ScanSnapshot {
+  /**
+   * Retrieves the latest real scan snapshot.
+   * Returns null if no real scan has completed yet (never shows fake seed data in production).
+   */
+  public async getLatestScan(): Promise<ScanSnapshot | null> {
     if (this.cachedSnapshot) {
       return this.cachedSnapshot;
     }
 
-    // Try reading latest updated file from writable storage
     try {
-      if (fs.existsSync(this.dbFilePath)) {
-        const raw = fs.readFileSync(this.dbFilePath, 'utf-8');
-        this.cachedSnapshot = JSON.parse(raw);
-        return this.cachedSnapshot!;
+      const snap = await this.adapter.getLatestScan();
+      if (snap) {
+        this.cachedSnapshot = snap;
+        return snap;
       }
     } catch (err) {
-      // Fall through to bundled snapshot
+      console.error('[ScanDatabase] Failed to read snapshot from adapter:', err);
     }
 
-    // Always fallback to the bundled compile-time snapshot containing all 551 markets
-    this.cachedSnapshot = initialSeedSnapshot as unknown as ScanSnapshot;
+    return null;
+  }
+
+  /**
+   * Synchronous accessor for in-memory cached snapshot (useful in sync renders).
+   */
+  public getCachedLatestScan(): ScanSnapshot | null {
     return this.cachedSnapshot;
   }
 
+  /**
+   * Saves a completed or updated scan snapshot to persistent storage.
+   */
   public async saveScan(snapshot: ScanSnapshot): Promise<void> {
     this.cachedSnapshot = snapshot;
-    this.ensureDirectory();
-
-    const tmpPath = `${this.dbFilePath}.${Date.now()}.tmp`;
-    const serialized = JSON.stringify(snapshot, null, 2);
-
     try {
-      await fs.promises.writeFile(tmpPath, serialized, 'utf-8');
-      await fs.promises.rename(tmpPath, this.dbFilePath);
+      await this.adapter.saveScan(snapshot);
     } catch (err) {
-      // In strictly read-only environments, snapshot remains safely cached in memory
-      console.warn('[ScanDatabase] Disk persistence skipped; cached in memory.');
+      console.error('[ScanDatabase] Failed to persist scan snapshot:', err);
     }
   }
 
-  public getMarket(marketId: string): ScannedMarketData | null {
-    const scan = this.getLatestScan();
+  /**
+   * Scan job tracking for reliable serverless lifecycle management.
+   */
+  public async getActiveJob(): Promise<ScanJob | null> {
+    try {
+      return await this.adapter.getActiveJob();
+    } catch (err) {
+      return null;
+    }
+  }
+
+  public async saveActiveJob(job: ScanJob | null): Promise<void> {
+    try {
+      await this.adapter.saveActiveJob(job);
+    } catch (err) {
+      console.error('[ScanDatabase] Failed to persist active job:', err);
+    }
+  }
+
+  /**
+   * Fair queueing: timestamps when markets were last evaluated with candles.
+   */
+  public async getMarketTimestamps(): Promise<Record<string, number>> {
+    try {
+      return await this.adapter.getMarketScanTimestamps();
+    } catch (err) {
+      return {};
+    }
+  }
+
+  public async saveMarketTimestamps(timestamps: Record<string, number>): Promise<void> {
+    try {
+      await this.adapter.saveMarketScanTimestamps(timestamps);
+    } catch (err) {
+      console.error('[ScanDatabase] Failed to persist market timestamps:', err);
+    }
+  }
+
+  public async getMarket(marketId: string): Promise<ScannedMarketData | null> {
+    const scan = await this.getLatestScan();
+    if (!scan) return null;
     return (
       scan.markets.find((m) => m.market.id === marketId || m.market.symbol === marketId) || null
     );
   }
 }
 
-// Global persistent singleton for runtime
+// Global persistent database singleton for runtime
 export const globalDb = new ScanDatabase();

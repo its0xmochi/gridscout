@@ -9,7 +9,7 @@ import { RangeType } from '../lib/analytics/ranges';
 interface MarketTableProps {
   markets: ScannedMarketData[];
   selectedRangeType: RangeType;
-  tab: 'eligible' | 'excluded' | 'insufficient_data';
+  tab: 'eligible' | 'excluded' | 'insufficient_data' | 'pending_scan';
 }
 
 type SortField = 'score' | 'price' | 'change24h' | 'volume' | 'oi' | 'funding' | 'cycles' | 'dailyReturn';
@@ -341,9 +341,13 @@ export const MarketTable: React.FC<MarketTableProps> = ({
                     <span className="px-2 py-0.5 rounded text-[11px] bg-rose-500/10 text-rose-300 border border-rose-500/30 max-w-[200px] truncate block" title={item.score.exclusionReason}>
                       {item.score.exclusionReason || 'Excluded'}
                     </span>
+                  ) : tab === 'pending_scan' || item.status === 'pending_scan' ? (
+                    <span className="px-2 py-0.5 rounded text-[11px] bg-sky-500/10 text-sky-300 border border-sky-500/30" title="Queued for next 5-minute scan cycle">
+                      Queued (Next Cycle)
+                    </span>
                   ) : tab === 'insufficient_data' ? (
-                    <span className="px-2 py-0.5 rounded text-[11px] bg-amber-500/10 text-amber-300 border border-amber-500/30">
-                      Insufficient Candles
+                    <span className="px-2 py-0.5 rounded text-[11px] bg-amber-500/10 text-amber-300 border border-amber-500/30" title={item.errorDetails || item.score.exclusionReason}>
+                      {item.errorDetails || 'Insufficient Candles'}
                     </span>
                   ) : item.score.warnings.length > 0 ? (
                     <div className="flex items-center space-x-1 text-amber-400 text-[11px]">

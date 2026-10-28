@@ -15,7 +15,7 @@ export async function GET(
     const decodedMarketId = decodeURIComponent(marketId);
 
     // Look up cached scanned market
-    const scanned = globalDb.getMarket(decodedMarketId);
+    const scanned = await globalDb.getMarket(decodedMarketId);
     if (!scanned) {
       return NextResponse.json(
         { success: false, error: `Market '${decodedMarketId}' not found in scan database.` },

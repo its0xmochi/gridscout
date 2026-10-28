@@ -33,15 +33,16 @@ GridScout dynamically discovers, models, backtests, and ranks perpetual futures 
 └────────────────────────────────────┬───────────────────────────────────┘
                                      ▼
 ┌────────────────────────────────────────────────────────────────────────┐
-│                    Persistence & Scheduled Scanner                     │
-│  - Durable Local Persistence (Atomic file-backed JSON storage)         │
-│  - 5-Minute Background Scanner with deduplication & in-flight locks    │
-│  - 60s memory cache for live quotes; stale-data fallback flags        │
+│                    Persistence & Serverless Lifecycle                  │
+│  - StorageAdapter: Vercel KV / Upstash Redis REST & File/Memory        │
+│  - Fair Rotation Queue: Least-recently-scanned candle budget rotation  │
+│  - Lifecycle Tracking: queued / running / completed / failed states    │
+│  - Vercel Cron Integration (vercel.json) with CRON_SECRET auth         │
 └────────────────────────────────────┬───────────────────────────────────┘
                                      ▼
 ┌────────────────────────────────────────────────────────────────────────┐
 │                         Presentation Dashboard                         │
-│  - Home Dashboard: Sortable, filterable table (Eligible, Excluded, Bad)│
+│  - Home Dashboard: Sortable, filterable table (Eligible, Queued, Bad)  │
 │  - Market Detail: Lightweight Charts (1h/15m), Grid Bands, Recalc      │
 │  - Regime Alerts: Range breaches, recent breakout, extreme funding     │
 │  - Safety & Export: Plaintext settings copy, read-only guarantees      │
@@ -50,34 +51,51 @@ GridScout dynamically discovers, models, backtests, and ranks perpetual futures 
 
 ---
 
+## Environment Variables & Persistence
+
+GridScout uses a modular storage adapter layer (`lib/storage/storage-adapter.ts`). In production on Vercel, it connects directly via HTTP fetch to Upstash Redis or Vercel KV REST APIs without process-local memory, ephemeral `/tmp` dependencies, or bundled static seed data.
+
+### Supported Environment Variables:
+
+| Variable | Description | Default / Fallback |
+| :--- | :--- | :--- |
+| `CRON_SECRET` | Secret bearer token required to authenticate Vercel scheduled cron requests at `/api/scan/cron`. | Unset in local development (allows manual testing). Required in production. |
+| `KV_REST_API_URL` | Vercel KV REST endpoint URL for serverless cross-instance persistence. | If unset, falls back to `UPSTASH_REDIS_REST_URL` or local filesystem adapter. |
+| `KV_REST_API_TOKEN` | Vercel KV REST authentication token. | Paired with `KV_REST_API_URL`. |
+| `UPSTASH_REDIS_REST_URL`| Upstash Redis REST endpoint URL. | Alternative cloud KV provider. |
+| `UPSTASH_REDIS_REST_TOKEN`| Upstash Redis REST authentication token. | Paired with `UPSTASH_REDIS_REST_URL`. |
+
+When no cloud KV credentials are provided, GridScout uses atomic file storage in development/tests, and displays an explicit *"Waiting for first successful scan"* prompt until a real scan completes.
+
+---
+
 ## Key Features
 
 1. **Dynamic Builder DEX Discovery:**
    - Discovers all active DEXes via `{"type":"perpDexs"}` without hardcoding.
    - Accurately prefixes canonical symbols (e.g. `xyz:XYZ100`, `io:NVDA`) and queries core via empty string parameter.
-2. **Precision & Valid Tick Engine:**
+2. **Fair Queueing & Candle Budget Rotation:**
+   - Evaluates eligible markets by volume and restrictions.
+   - Rather than starving lower-volume eligible markets, an atomic least-recently-scanned priority queue rotates candle fetches fairly across successive scan cycles.
+   - Markets are distinctly categorized: `eligible`, `pending_scan`, `insufficient_data`, and `excluded`.
+3. **Precision & Valid Tick Engine:**
    - Implements Hyperliquid's dual precision rules: at most **5 significant figures** AND at most `6 - szDecimals` decimal places.
    - Calculates dynamic minimum tick increments across large-cap (BTC at $80k), medium, and sub-dollar tokens (DOGE at $0.079).
    - Validates that grid step size is $\ge 3$ ticks and $\ge 6\times$ estimated round-trip trading fees.
-3. **Robust Oscillating Indicators:**
+4. **Robust Oscillating Indicators:**
    - **Kaufman Efficiency Ratio (3d & 14d):** Rewards mean-reverting chop; penalizes unidirectional drift.
    - **ADX(14):** Discriminates sideways ranges from trending expansion.
-   - **Rolling 24h Median Crossings:** Evaluated strictly point-in-time without look-ahead bias or duplicate counts on boundary touches.
+   - **Rolling 24h Median Crossings:** Evaluated strictly point-in-time without look-ahead bias.
    - **10th–90th Percentile Band Closeness:** Measures price clustering around the median.
-4. **Realistic Intrabar-Aware Backtester:**
+5. **Realistic Intrabar-Aware Backtester:**
    - Evaluates 15m historical bars over 3-day and 7-day windows.
-   - **Conservative Fill Model:** Does not fabricate artificial double fills when an OHLC candle touches both buy and sell limits. Wicks are processed directionally (Open $\to$ Low $\to$ Close for green bars; Open $\to$ High $\to$ Close for red bars).
-   - Explicit cash, FIFO inventory, maker fee, and hourly funding accounting.
-   - Computes completed cycles/day, net return on margin/day, maximum inventory exposure, and maximum drawdown.
-5. **Explainable 0–100 Scoring & Ranking:**
-   - Transparent subscores: Range-boundness (25), Mean reversion (15), Swing vs Fees (20), Liquidity (15), Tail risk (15), Funding (5), Current state (5).
-   - Hard exclusions: Volume $<\$250\text{k}$, restricted status, or invalid grid step.
-   - Penalties: Price outside range ($-15$), recent 6h breakout ($-10$), negative net backtest (caps score at 50; never ranked at the top).
-6. **Dark Responsive Dashboard & Detail View:**
-   - Real-time sortable, searchable table with Eligible, Excluded, and Insufficient Data tabs.
-   - `lightweight-charts` candlestick display with suggested Floor, Ceiling, and Stop-loss price lines.
-   - Interactive local recalculation panel for leverage, grid count, hypothetical capital, and fees.
-   - Plain-text "Copy settings" export button.
+   - **Conservative Fill Model:** Directional path sequencing (Open $\to$ Low $\to$ Close for green bars; Open $\to$ High $\to$ Close for red bars) prevents false churn on opposing wick touches.
+   - Two-sided maker fees on entries and exits, FIFO inventory, and hourly funding accounting.
+   - Penalizes negative net backtests: caps combined score $\le 45$ with clear warnings.
+6. **Scheduled Automation & Serverless Background Execution:**
+   - Configured with `vercel.json` crons running every 5 minutes.
+   - Uses Next.js 15 `after()` to complete background scans reliably without depending on client HTTP connections staying open.
+   - Exposes scan IDs with real-time `queued`, `running`, `completed`, and `failed` status states.
 
 ---
 
@@ -98,76 +116,53 @@ GridScout dynamically discovers, models, backtests, and ranks perpetual futures 
 ### 1. Installation
 
 ```bash
+git clone https://github.com/its0xmochi/gridscout.git
 cd gridscout
 npm install
 ```
 
-### 2. Run Test Suite
-
-Run the full Vitest suite (35 unit and integration tests across precision, adapters, indicators, ranges, backtester, scoring, and scanner):
+### 2. Running Unit & Integration Tests
 
 ```bash
-npm run test
+npm test
 ```
 
-### 3. Build for Production
+41 automated regression tests covering:
+- Hyperliquid dynamic precision & tick calculation
+- Indicator calculations (Kaufman ER, ADX, ATR, median crossings)
+- Intrabar backtester fills, two-sided fees, and inventory mark-to-market
+- 7-factor scoring and negative net backtest penalties
+- Empty initial storage handling and persistent cross-instance synchronization
+- Scheduled cron authorization and overlap prevention
+- Queue fairness and least-recently-scanned rotation
+
+### 3. Development Server
+
+```bash
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+### 4. Production Build
 
 ```bash
 npm run build
+npm start
 ```
-
-### 4. Start Web Application
-
-```bash
-npm run start
-```
-Open [http://localhost:3000](http://localhost:3000) in your browser.
-
-### 5. Run Standalone Background Worker (Optional)
-
-In persistent server environments (e.g., VPS, Docker, dedicated Node container), run the background scanning daemon:
-
-```bash
-npm run worker
-```
-This periodically scans the Hyperliquid universe every 5 minutes and updates the durable `data/scans.json` store.
-
-For serverless deployments (e.g. Vercel), invoke `/api/scan/cron` via scheduled cron jobs.
 
 ---
 
-## Data Sources & Hyperliquid API Endpoints
+## Live Deployment Verification
 
-GridScout queries the public endpoint `https://api.hyperliquid.xyz/info`:
+Live deployment: [https://gridscout-gold.vercel.app](https://gridscout-gold.vercel.app)
 
-1. `{"type":"perpDexs"}`: Dynamic discovery of builder DEXes. Core is index 0 (`null`).
-2. `{"type":"metaAndAssetCtxs", "dex": "<dex>"}`: Market metadata (`szDecimals`, `maxLeverage`, `growthMode`) and asset contexts (`markPx`, `prevDayPx`, `funding`, `dayNtlVlm`, `openInterest`).
-3. `{"type":"candleSnapshot", "req":{"coin":"<coin>", "interval":"1h"|"15m", "startTime":..., "endTime":...}}`: 14 days of 1h candles and 7 days of 15m candles with epoch millisecond timestamps.
-4. `{"type":"l2Book", "coin":"<coin>"}`: 20-level orderbook depth and top-of-book spread.
-
----
-
-## How to Add Another Exchange Adapter
-
-GridScout is built around an exchange-agnostic interface in `lib/adapters/types.ts`:
-
-```typescript
-export interface ExchangeAdapter {
-  name: string;
-  listMarkets(): Promise<Market[]>;
-  getCandles(coin: string, interval: '1h' | '15m', startTime: number, endTime: number): Promise<Candle[]>;
-  getContext(coin: string): Promise<Market | null>;
-  getOrderBook(coin: string): Promise<OrderBook | null>;
-}
-```
-
-To add a new exchange (e.g. Binance, Bybit, dYdX):
-1. Create `lib/adapters/<exchange>.ts` implementing `ExchangeAdapter`.
-2. Translate exchange-specific market structures into canonical `Market` and `Candle` types.
-3. Pass your adapter instance to `new MarketScanner(new NewExchangeAdapter())`.
+- **Cron Endpoint:** `/api/scan/cron` (requires `Authorization: Bearer <CRON_SECRET>`)
+- **Scan Status & API:** `/api/scan`
+- **Market Detail API:** `/api/markets/[marketId]`
 
 ---
 
-## Disclaimer
+## Footer Disclaimer
 
-Not financial advice. Backtests are historical simulations and do not predict future results. Grid trading can lose money, especially during sustained trends, breakouts, poor liquidity and adverse funding.
+*Not financial advice. Backtests are historical simulations and do not predict future results. Grid trading can lose money, especially during sustained trends, breakouts, poor liquidity and adverse funding.*

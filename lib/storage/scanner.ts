@@ -1,16 +1,17 @@
-import { ExchangeAdapter, Market, Candle, OrderBook } from '../adapters/types';
+import { ExchangeAdapter, Market, Candle } from '../adapters/types';
 import { HyperliquidAdapter } from '../adapters/hyperliquid';
 import { calculateGridRanges, buildGridConfig, DEFAULT_FEE_SETTINGS } from '../analytics/ranges';
-import { evaluateMarketSuitability, ScoringOptions } from '../analytics/scoring';
+import { evaluateMarketSuitability } from '../analytics/scoring';
 import { runGridBacktest } from '../backtest/simulator';
 import { ScanDatabase, ScannedMarketData, ScanSnapshot, globalDb } from './db';
+import { ScanJob } from './storage-adapter';
 
 export interface ScannerConfig {
   minVolumeUsd: number;
   candleCacheTtlMs: number;
   scanIntervalMs: number;
   maxParallelMarkets: number;
-  maxEligibleCandleFetchesPerScan?: number;
+  maxEligibleCandleFetchesPerScan: number;
 }
 
 export const DEFAULT_SCANNER_CONFIG: ScannerConfig = {
@@ -18,7 +19,7 @@ export const DEFAULT_SCANNER_CONFIG: ScannerConfig = {
   candleCacheTtlMs: 300000, // 5 minutes
   scanIntervalMs: 300000, // 5 minutes
   maxParallelMarkets: 2,
-  maxEligibleCandleFetchesPerScan: 25, // Respect exchange weighted rate limit budget
+  maxEligibleCandleFetchesPerScan: 25, // Respect exchange rate limit budget per scan
 };
 
 interface CandleCacheEntry {
@@ -47,63 +48,110 @@ export class MarketScanner {
     this.config = { ...DEFAULT_SCANNER_CONFIG, ...config };
   }
 
-  public getStatus() {
-    const latest = this.db.getLatestScan();
+  public async getStatus() {
+    const latest = await this.db.getLatestScan();
+    const activeJob = await this.db.getActiveJob();
+
+    const isRunning =
+      this.isScanning ||
+      (activeJob?.status === 'running' && Date.now() - activeJob.startedAt < 180000);
+
     return {
-      isScanning: this.isScanning,
+      isScanning: isRunning,
+      activeJob: isRunning ? activeJob : null,
       lastScanAttemptAt: this.lastScanAttemptAt,
       latestScanTimestamp: latest?.timestamp || 0,
       totalDiscovered: latest?.totalDiscovered || 0,
       eligibleCount: latest?.eligibleCount || 0,
       isStale: latest ? Date.now() - latest.timestamp > this.config.scanIntervalMs * 1.5 : true,
+      storageAdapter: this.db.getAdapterName(),
     };
   }
 
   /**
-   * Triggers a scan. Deduplicates overlapping calls.
+   * Triggers a scan. Deduplicates overlapping calls across instances.
    */
   public async runScan(forceRefresh: boolean = false): Promise<ScanSnapshot> {
     if (this.isScanning && this.currentScanPromise) {
-      console.log('[MarketScanner] Scan already in progress; reusing in-flight promise.');
+      console.log('[MarketScanner] Scan already in progress locally; reusing in-flight promise.');
       return this.currentScanPromise;
     }
 
-    const latest = this.db.getLatestScan();
+    this.isScanning = true;
+    this.currentScanPromise = this.executeScanSafe(forceRefresh).finally(() => {
+      this.isScanning = false;
+      this.currentScanPromise = null;
+    });
+
+    return this.currentScanPromise;
+  }
+
+  private async executeScanSafe(forceRefresh: boolean): Promise<ScanSnapshot> {
     const now = Date.now();
+    this.lastScanAttemptAt = now;
+
+    // Check shared persistent job state to prevent overlapping runs across serverless instances
+    const activeJob = await this.db.getActiveJob();
+    if (activeJob && activeJob.status === 'running' && now - activeJob.startedAt < 180000) {
+      console.log('[MarketScanner] Another serverless instance is already scanning. Waiting for result...');
+      const latest = await this.db.getLatestScan();
+      if (latest) return latest;
+    }
+
+    const latest = await this.db.getLatestScan();
     if (!forceRefresh && latest && now - latest.timestamp < this.config.scanIntervalMs) {
       console.log('[MarketScanner] Returning recent cached scan snapshot.');
       return latest;
     }
 
-    this.isScanning = true;
-    this.lastScanAttemptAt = now;
-
-    this.currentScanPromise = this.executeScanInternal()
-      .finally(() => {
-        this.isScanning = false;
-        this.currentScanPromise = null;
-      });
-
-    return this.currentScanPromise;
+    return this.executeScanInternal(now);
   }
 
-  private async executeScanInternal(): Promise<ScanSnapshot> {
-    const startTime = Date.now();
-    console.log('[MarketScanner] Starting full universe scan...');
+  private async executeScanInternal(startTime: number): Promise<ScanSnapshot> {
+    const scanId = `scan_${startTime}`;
+    console.log(`[MarketScanner] Starting universe scan (${scanId})...`);
+
+    // Record initial running job
+    const initialJob: ScanJob = {
+      id: scanId,
+      status: 'running',
+      startedAt: startTime,
+      progress: {
+        current: 0,
+        total: 100,
+        phase: 'Discovering markets',
+      },
+    };
+    await this.db.saveActiveJob(initialJob);
 
     let allMarkets: Market[] = [];
     try {
       allMarkets = await this.adapter.listMarkets();
     } catch (err: any) {
       console.error('[MarketScanner] Failed to discover markets:', err);
-      const prev = this.db.getLatestScan();
+      const prev = await this.db.getLatestScan();
       if (prev) {
         prev.isStale = true;
-        prev.status = 'failed';
-        prev.errorMessage = `Failed to discover markets: ${err?.message || 'Network error'}`;
-        await this.db.saveScan(prev).catch(() => {});
+        prev.errorMessage = `Discovery failed: ${err?.message || 'Network error'}`;
+        await this.db.saveScan(prev);
+        await this.db.saveActiveJob({
+          id: scanId,
+          status: 'failed',
+          startedAt: startTime,
+          completedAt: Date.now(),
+          progress: { current: 0, total: 100, phase: 'Failed' },
+          error: err?.message || 'Market discovery failed',
+        });
         return prev;
       }
+      await this.db.saveActiveJob({
+        id: scanId,
+        status: 'failed',
+        startedAt: startTime,
+        completedAt: Date.now(),
+        progress: { current: 0, total: 100, phase: 'Failed' },
+        error: err?.message || 'Market discovery failed',
+      });
       throw err;
     }
 
@@ -114,125 +162,200 @@ export class MarketScanner {
       dexSet.add(m.dex);
     }
 
-    // Sort all discovered markets by 24h volume descending so active markets are prioritized
-    allMarkets.sort((a, b) => b.dayNtlVlm - a.dayNtlVlm);
+    // Partition markets into excluded vs eligible candidates
+    const excludedCandidates: Market[] = [];
+    const eligibleCandidates: Market[] = [];
+
+    for (const m of allMarkets) {
+      if (m.dayNtlVlm < this.config.minVolumeUsd || m.isRestricted) {
+        excludedCandidates.push(m);
+      } else {
+        eligibleCandidates.push(m);
+      }
+    }
+
+    // Load persistent scan timestamps to enforce fair round-robin rotation across scan cycles
+    const marketTimestamps = await this.db.getMarketTimestamps();
+
+    // Sort eligible candidates by least-recently-scanned first, with 24h volume as secondary tiebreaker
+    eligibleCandidates.sort((a, b) => {
+      const timeA = marketTimestamps[a.symbol] || 0;
+      const timeB = marketTimestamps[b.symbol] || 0;
+      if (timeA !== timeB) {
+        return timeA - timeB; // Oldest / never-scanned first
+      }
+      return b.dayNtlVlm - a.dayNtlVlm; // Higher volume tiebreak
+    });
+
+    const maxFetches = this.config.maxEligibleCandleFetchesPerScan;
+    const batchToFetch = eligibleCandidates.slice(0, maxFetches);
+    const queuedForNext = eligibleCandidates.slice(maxFetches);
+
+    console.log(
+      `[MarketScanner] Candidates breakdown: ${eligibleCandidates.length} eligible (${batchToFetch.length} scanning this cycle, ${queuedForNext.length} queued for next cycle), ${excludedCandidates.length} excluded.`
+    );
 
     const scannedResults: ScannedMarketData[] = [];
     let eligibleCount = 0;
     let excludedCount = 0;
     let insufficientDataCount = 0;
+    let pendingScanCount = 0;
     let errorCount = 0;
 
-    // Process markets with controlled concurrency
-    const now = Date.now();
-    const fourteenDaysAgo = now - 14 * 24 * 3600 * 1000;
-    const sevenDaysAgo = now - 7 * 24 * 3600 * 1000;
+    // Helper for dummy placeholder grid config
+    const createPlaceholderConfig = (market: Market, isPending: boolean = false) => {
+      const dummyRange = {
+        type: 'normal' as const,
+        lower: market.markPx * 0.9,
+        upper: market.markPx * 1.1,
+        rawLower: market.markPx * 0.9,
+        rawUpper: market.markPx * 1.1,
+        atrBuffer: market.markPx * 0.02,
+        percentileLowUsed: 5,
+        percentileHighUsed: 95,
+        width: market.markPx * 0.2,
+        widthPct: 20,
+      };
+      // Keep levels empty to keep JSON lean and fast in storage
+      const dummyConfig = {
+        range: dummyRange,
+        gridCount: 60,
+        stepPrice: (dummyRange.upper - dummyRange.lower) / 60,
+        stepPct: 0.33,
+        levels: [],
+        isValid: !market.isRestricted,
+        roundTripFeePct: 0.03,
+      };
+      return { dummyRange, dummyConfig };
+    };
 
-    // Process in small batches with polite pacing
-    const chunkSize = 2; // conservative concurrency to respect exchange rate limits
-    const maxFetches = this.config.maxEligibleCandleFetchesPerScan ?? 25;
-    let candleFetchesCount = 0;
+    // 1. Process excluded markets (no candle budget consumed)
+    for (const market of excludedCandidates) {
+      const { dummyRange, dummyConfig } = createPlaceholderConfig(market);
+      const score = evaluateMarketSuitability(
+        market,
+        [],
+        dummyConfig as any,
+        undefined,
+        undefined,
+        null,
+        { minVolumeUsd: this.config.minVolumeUsd }
+      );
 
-    for (let i = 0; i < allMarkets.length; i += chunkSize) {
-      const chunk = allMarkets.slice(i, i + chunkSize);
+      scannedResults.push({
+        market,
+        score,
+        ranges: { tight: dummyRange, normal: dummyRange, safe: dummyRange },
+        gridConfigNormal: dummyConfig as any,
+        gridConfigTight: dummyConfig as any,
+        gridConfigSafe: dummyConfig as any,
+        status: 'excluded',
+        lastUpdated: startTime,
+      });
+      excludedCount++;
+    }
+
+    // 2. Process queued markets waiting for upcoming scan cycles
+    for (const market of queuedForNext) {
+      const { dummyRange, dummyConfig } = createPlaceholderConfig(market, true);
+      const score = evaluateMarketSuitability(
+        market,
+        [],
+        dummyConfig as any,
+        undefined,
+        undefined,
+        null,
+        { minVolumeUsd: this.config.minVolumeUsd }
+      );
+      score.isEligible = false;
+      score.exclusionReason = `Queued for next scan cycle (candle budget: ${maxFetches} markets/cycle).`;
+
+      scannedResults.push({
+        market,
+        score,
+        ranges: { tight: dummyRange, normal: dummyRange, safe: dummyRange },
+        gridConfigNormal: dummyConfig as any,
+        gridConfigTight: dummyConfig as any,
+        gridConfigSafe: dummyConfig as any,
+        status: 'pending_scan',
+        lastUpdated: marketTimestamps[market.symbol] || 0,
+      });
+      pendingScanCount++;
+    }
+
+    // 3. Process the current batch of eligible markets with polite concurrency
+    const fourteenDaysAgo = startTime - 14 * 24 * 3600 * 1000;
+    const sevenDaysAgo = startTime - 7 * 24 * 3600 * 1000;
+    const chunkSize = Math.max(1, this.config.maxParallelMarkets);
+
+    for (let i = 0; i < batchToFetch.length; i += chunkSize) {
+      const chunk = batchToFetch.slice(i, i + chunkSize);
+
+      await this.db.saveActiveJob({
+        id: scanId,
+        status: 'running',
+        startedAt: startTime,
+        progress: {
+          current: i,
+          total: batchToFetch.length,
+          phase: `Evaluating markets (${i}/${batchToFetch.length})`,
+        },
+      });
+
       await Promise.all(
         chunk.map(async (market) => {
           try {
-            // First pass: Check volume threshold and restriction
-            const meetsVolume = market.dayNtlVlm >= this.config.minVolumeUsd;
-            const isRestricted = market.isRestricted;
-
-            if (!meetsVolume || isRestricted) {
-              // Market is excluded based on volume or restriction
-              // Excluded markets do not waste request budget on candle history
-              const dummyRange = {
-                type: 'normal' as const,
-                lower: market.markPx * 0.9,
-                upper: market.markPx * 1.1,
-                rawLower: market.markPx * 0.9,
-                rawUpper: market.markPx * 1.1,
-                atrBuffer: market.markPx * 0.02,
-                percentileLowUsed: 5,
-                percentileHighUsed: 95,
-                width: market.markPx * 0.2,
-                widthPct: 20,
-              };
-              const dummyConfig = buildGridConfig(dummyRange, market.markPx, market.szDecimals);
-              const score = evaluateMarketSuitability(market, [], dummyConfig, undefined, undefined, null, {
-                minVolumeUsd: this.config.minVolumeUsd,
-              });
-
-              scannedResults.push({
-                market,
-                score,
-                ranges: { tight: dummyRange, normal: dummyRange, safe: dummyRange },
-                gridConfigNormal: dummyConfig,
-                gridConfigTight: dummyConfig,
-                gridConfigSafe: dummyConfig,
-                status: 'excluded',
-                lastUpdated: now,
-              });
-              excludedCount++;
-              return;
-            }
-
-            // Eligible market: check request budget
             let candles1h: Candle[] = [];
             let candles15m: Candle[] = [];
 
             const cached = this.candleCache.get(market.symbol);
-            if (cached && now - cached.fetchedAt < this.config.candleCacheTtlMs) {
+            if (cached && startTime - cached.fetchedAt < this.config.candleCacheTtlMs) {
               candles1h = cached.candles1h;
               candles15m = cached.candles15m;
-            } else if (candleFetchesCount < maxFetches) {
-              candleFetchesCount++;
+            } else {
               [candles1h, candles15m] = await Promise.all([
-                this.adapter.getCandles(market.symbol, '1h', fourteenDaysAgo, now).catch(() => []),
-                this.adapter.getCandles(market.symbol, '15m', sevenDaysAgo, now).catch(() => []),
+                this.adapter.getCandles(market.symbol, '1h', fourteenDaysAgo, startTime).catch(() => []),
+                this.adapter.getCandles(market.symbol, '15m', sevenDaysAgo, startTime).catch(() => []),
               ]);
 
               if (candles1h.length > 0) {
                 this.candleCache.set(market.symbol, {
                   candles1h,
                   candles15m,
-                  fetchedAt: now,
+                  fetchedAt: startTime,
                 });
               }
             }
 
+            // Update timestamp indicating this market was evaluated
+            marketTimestamps[market.symbol] = startTime;
+
             if (candles1h.length < 72) {
-              // Insufficient history
-              const dummyRange = {
-                type: 'normal' as const,
-                lower: market.markPx * 0.9,
-                upper: market.markPx * 1.1,
-                rawLower: market.markPx * 0.9,
-                rawUpper: market.markPx * 1.1,
-                atrBuffer: market.markPx * 0.02,
-                percentileLowUsed: 5,
-                percentileHighUsed: 95,
-                width: market.markPx * 0.2,
-                widthPct: 20,
-              };
-              const dummyConfig = buildGridConfig(dummyRange, market.markPx, market.szDecimals);
-              const score = evaluateMarketSuitability(market, candles1h, dummyConfig, undefined, undefined, null);
+              // Real insufficient history
+              const { dummyRange, dummyConfig } = createPlaceholderConfig(market);
+              const score = evaluateMarketSuitability(
+                market,
+                candles1h,
+                dummyConfig as any,
+                undefined,
+                undefined,
+                null
+              );
 
               scannedResults.push({
                 market,
                 score,
                 ranges: { tight: dummyRange, normal: dummyRange, safe: dummyRange },
-                gridConfigNormal: dummyConfig,
-                gridConfigTight: dummyConfig,
-                gridConfigSafe: dummyConfig,
+                gridConfigNormal: dummyConfig as any,
+                gridConfigTight: dummyConfig as any,
+                gridConfigSafe: dummyConfig as any,
                 status: 'insufficient_data',
-                lastUpdated: now,
+                errorDetails: `Only ${candles1h.length} 1h candles returned (>=72 required)`,
+                lastUpdated: startTime,
               });
               insufficientDataCount++;
               return;
             }
-
-            // Orderbook is queried on-demand on market detail view to conserve scan budget
-            const orderBook = null;
 
             // Calculate grid ranges
             const ranges = calculateGridRanges(candles1h, market.szDecimals);
@@ -270,7 +393,7 @@ export class MarketScanner {
               gridConfigNormal,
               backtest3d,
               backtest7d,
-              orderBook,
+              null,
               { minVolumeUsd: this.config.minVolumeUsd }
             );
 
@@ -284,7 +407,7 @@ export class MarketScanner {
               backtest3d,
               backtest7d,
               status: score.isEligible ? 'eligible' : 'excluded',
-              lastUpdated: now,
+              lastUpdated: startTime,
             });
 
             if (score.isEligible) {
@@ -295,61 +418,76 @@ export class MarketScanner {
           } catch (marketErr: any) {
             console.error(`[MarketScanner] Error evaluating market ${market.symbol}:`, marketErr);
             errorCount++;
-            // Single market failure is safely recorded and does not crash scan
-            const dummyRange = {
-              type: 'normal' as const,
-              lower: market.markPx * 0.9,
-              upper: market.markPx * 1.1,
-              rawLower: market.markPx * 0.9,
-              rawUpper: market.markPx * 1.1,
-              atrBuffer: 0,
-              percentileLowUsed: 5,
-              percentileHighUsed: 95,
-              width: 0,
-              widthPct: 0,
-            };
-            const dummyConfig = buildGridConfig(dummyRange, market.markPx, market.szDecimals);
+            const { dummyRange, dummyConfig } = createPlaceholderConfig(market);
             scannedResults.push({
               market,
-              score: evaluateMarketSuitability(market, [], dummyConfig),
+              score: evaluateMarketSuitability(market, [], dummyConfig as any),
               ranges: { tight: dummyRange, normal: dummyRange, safe: dummyRange },
-              gridConfigNormal: dummyConfig,
-              gridConfigTight: dummyConfig,
-              gridConfigSafe: dummyConfig,
+              gridConfigNormal: dummyConfig as any,
+              gridConfigTight: dummyConfig as any,
+              gridConfigSafe: dummyConfig as any,
               status: 'error',
               errorDetails: marketErr?.message || 'Calculation error',
-              lastUpdated: now,
+              lastUpdated: startTime,
             });
           }
         })
       );
     }
 
+    // Persist updated rotation timestamps
+    await this.db.saveMarketTimestamps(marketTimestamps);
+
     // Sort scanned results: eligible first ordered by combinedScore descending
     scannedResults.sort((a, b) => {
-      if (a.status === 'eligible' && b.status !== 'eligible') return -1;
-      if (a.status !== 'eligible' && b.status === 'eligible') return 1;
+      const order: Record<string, number> = {
+        eligible: 0,
+        pending_scan: 1,
+        insufficient_data: 2,
+        excluded: 3,
+        error: 4,
+      };
+      const rankA = order[a.status] ?? 5;
+      const rankB = order[b.status] ?? 5;
+      if (rankA !== rankB) return rankA - rankB;
       return b.score.combinedScore - a.score.combinedScore;
     });
 
     const durationMs = Date.now() - startTime;
     const snapshot: ScanSnapshot = {
-      id: `scan_${now}`,
-      timestamp: now,
+      id: scanId,
+      timestamp: startTime,
       durationMs,
       totalDiscovered: allMarkets.length,
       eligibleCount,
       excludedCount,
       insufficientDataCount,
+      pendingScanCount,
       errorCount,
       dexesCovered: Array.from(dexSet),
       markets: scannedResults,
       status: 'completed',
     };
 
-    console.log(`[MarketScanner] Scan completed in ${durationMs}ms: ${eligibleCount} eligible, ${excludedCount} excluded, ${insufficientDataCount} insufficient data, ${errorCount} errors.`);
+    console.log(
+      `[MarketScanner] Scan completed in ${durationMs}ms: ${eligibleCount} eligible, ${pendingScanCount} pending, ${excludedCount} excluded, ${insufficientDataCount} insufficient data, ${errorCount} errors.`
+    );
 
     await this.db.saveScan(snapshot);
+
+    // Mark job as completed
+    await this.db.saveActiveJob({
+      id: scanId,
+      status: 'completed',
+      startedAt: startTime,
+      completedAt: Date.now(),
+      progress: {
+        current: batchToFetch.length,
+        total: batchToFetch.length,
+        phase: 'Scan completed',
+      },
+    });
+
     return snapshot;
   }
 }
