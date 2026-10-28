@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState } from 'react';
-import { Sliders, Copy, Check, AlertTriangle, Info } from 'lucide-react';
+import { Sliders, Copy, Check, AlertTriangle } from 'lucide-react';
 import { FeeSettings, GridConfig, GridRange, RangeType, buildGridConfig } from '../lib/analytics/ranges';
 import { Market } from '../lib/adapters/types';
 
@@ -33,7 +33,6 @@ export const RecalculatePanel: React.FC<RecalculatePanelProps> = ({
   const [takerFee, setTakerFee] = useState<number>(0.045);
   const [copied, setCopied] = useState<boolean>(false);
 
-  // Recalculate local config
   const feeSettings: FeeSettings = {
     makerFeePct: makerFee,
     takerFeePct: takerFee,
@@ -51,15 +50,15 @@ export const RecalculatePanel: React.FC<RecalculatePanelProps> = ({
     capital
   );
 
-  const handleApply = (newGridCount?: number, newLeverage?: number) => {
+  const handleApply = (newGridCount: number, newLeverage: number) => {
     const updated = buildGridConfig(
       currentRange,
       market.markPx,
       market.szDecimals,
-      newGridCount ?? gridCount,
+      newGridCount,
       feeSettings,
       1.0,
-      newLeverage ?? leverage,
+      newLeverage,
       capital
     );
     onConfigChange(updated);
@@ -90,6 +89,9 @@ Disclaimer: Historical simulation only, not financial advice.
     setTimeout(() => setCopied(false), 2500);
   };
 
+  const safeGridCount = Math.max(1, localConfig.gridCount || 20);
+  const orderValuePerGrid = ((capital * leverage) / safeGridCount).toFixed(1);
+
   return (
     <div className="bg-dark-850 border border-dark-700 rounded-xl p-5 space-y-5">
       <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-dark-750">
@@ -111,7 +113,18 @@ Disclaimer: Historical simulation only, not financial advice.
               key={type}
               onClick={() => {
                 onSelectRangeType(type);
-                handleApply();
+                const newRange = ranges[type];
+                const updated = buildGridConfig(
+                  newRange,
+                  market.markPx,
+                  market.szDecimals,
+                  gridCount,
+                  feeSettings,
+                  1.0,
+                  leverage,
+                  capital
+                );
+                onConfigChange(updated);
               }}
               className={`py-2 px-3 rounded-lg text-xs font-semibold capitalize border transition-colors ${
                 selectedRangeType === type
@@ -139,17 +152,17 @@ Disclaimer: Historical simulation only, not financial advice.
           <input
             type="range"
             min={1}
-            max={Math.min(20, market.maxLeverage)}
+            max={Math.max(1, Math.min(20, market.maxLeverage || 20))}
             step={1}
             value={leverage}
             onChange={(e) => {
-              const val = Number(e.target.value);
+              const val = Math.max(1, Number(e.target.value));
               setLeverage(val);
-              handleApply(undefined, val);
+              handleApply(gridCount, val);
             }}
-            className="w-full accent-emerald-500"
+            className="w-full accent-emerald-500 cursor-pointer"
           />
-          <span className="text-[10px] text-slate-500">Exchange max: {market.maxLeverage}x</span>
+          <span className="text-[10px] text-slate-500">Exchange max: {market.maxLeverage || 20}x</span>
         </div>
 
         {/* Grid Count */}
@@ -165,11 +178,11 @@ Disclaimer: Historical simulation only, not financial advice.
             step={2}
             value={gridCount}
             onChange={(e) => {
-              const val = Number(e.target.value);
+              const val = Math.max(10, Number(e.target.value));
               setGridCount(val);
-              handleApply(val, undefined);
+              handleApply(val, leverage);
             }}
-            className="w-full accent-emerald-500"
+            className="w-full accent-emerald-500 cursor-pointer"
           />
           <span className="text-[10px] text-slate-500">Step: {localConfig.stepPct.toFixed(2)}%</span>
         </div>
@@ -186,7 +199,10 @@ Disclaimer: Historical simulation only, not financial advice.
             max={100000}
             step={100}
             value={capital}
-            onChange={(e) => setCapital(Math.max(100, Number(e.target.value)))}
+            onChange={(e) => {
+              const val = Math.max(100, Number(e.target.value) || 100);
+              setCapital(val);
+            }}
             className="w-full bg-dark-900 border border-dark-700 rounded-lg px-2.5 py-1 text-slate-100 font-mono"
           />
         </div>
@@ -202,7 +218,10 @@ Disclaimer: Historical simulation only, not financial advice.
             step={0.001}
             min={0}
             value={makerFee}
-            onChange={(e) => setMakerFee(Number(e.target.value))}
+            onChange={(e) => {
+              const val = Math.max(0, Number(e.target.value) || 0);
+              setMakerFee(val);
+            }}
             className="w-full bg-dark-900 border border-dark-700 rounded-lg px-2.5 py-1 text-slate-100 font-mono"
           />
         </div>
@@ -243,7 +262,7 @@ Disclaimer: Historical simulation only, not financial advice.
           <div>
             <span className="text-slate-500 block text-[10px]">ORDER VALUE</span>
             <span className="text-slate-100 font-bold">
-              ${((capital * leverage) / localConfig.gridCount).toFixed(1)} / grid
+              ${orderValuePerGrid} / grid
             </span>
           </div>
         </div>

@@ -5,12 +5,13 @@ import {
   createChart,
   IChartApi,
   ISeriesApi,
+  IPriceLine,
   CandlestickData,
   UTCTimestamp,
   LineStyle,
 } from 'lightweight-charts';
 import { Candle } from '../lib/adapters/types';
-import { GridConfig, GridRange } from '../lib/analytics/ranges';
+import { GridConfig } from '../lib/analytics/ranges';
 
 interface CandlestickChartProps {
   candles: Candle[];
@@ -29,20 +30,31 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
 }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const chartInstanceRef = useRef<IChartApi | null>(null);
+  const seriesRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const priceLinesRef = useRef<IPriceLine[]>([]);
 
+  // 1. Initialize and update chart canvas & candlestick series (Only when candles change)
   useEffect(() => {
     if (!chartContainerRef.current) return;
 
-    // Dispose previous instance if exists
-    if (chartInstanceRef.current) {
-      chartInstanceRef.current.remove();
-      chartInstanceRef.current = null;
-    }
-
     const container = chartContainerRef.current;
 
+    // Clean up any existing chart
+    if (chartInstanceRef.current) {
+      try {
+        chartInstanceRef.current.remove();
+      } catch (err) {
+        console.warn('Error removing chart:', err);
+      }
+      chartInstanceRef.current = null;
+      seriesRef.current = null;
+      priceLinesRef.current = [];
+    }
+
+    container.innerHTML = '';
+
     const chart = createChart(container, {
-      width: container.clientWidth,
+      width: container.clientWidth || 800,
       height: 440,
       layout: {
         background: { color: '#0b0e14' },
@@ -70,7 +82,7 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
 
     chartInstanceRef.current = chart;
 
-    const candlestickSeries: ISeriesApi<'Candlestick'> = chart.addCandlestickSeries({
+    const candlestickSeries = chart.addCandlestickSeries({
       upColor: '#10b981',
       downColor: '#ef4444',
       borderVisible: false,
@@ -78,81 +90,136 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
       wickDownColor: '#ef4444',
     });
 
-    // Format candle data
-    const formattedData: CandlestickData[] = candles
-      .map((c) => ({
-        time: Math.floor(c.time / 1000) as UTCTimestamp,
-        open: c.open,
-        high: c.high,
-        low: c.low,
-        close: c.close,
-      }))
-      .sort((a, b) => (a.time as number) - (b.time as number));
+    seriesRef.current = candlestickSeries;
 
-    candlestickSeries.setData(formattedData);
+    // Format candle data with timestamp deduplication to prevent lightweight-charts uniqueness errors
+    const seenTimes = new Set<number>();
+    const formattedData: CandlestickData[] = [];
 
-    // Add Range Bounds (Ceiling & Floor)
-    candlestickSeries.createPriceLine({
-      price: gridConfig.range.upper,
-      color: '#10b981',
-      lineWidth: 2,
-      lineStyle: LineStyle.Dashed,
-      axisLabelVisible: true,
-      title: 'Grid Ceiling',
-    });
-
-    candlestickSeries.createPriceLine({
-      price: gridConfig.range.lower,
-      color: '#ef4444',
-      lineWidth: 2,
-      lineStyle: LineStyle.Dashed,
-      axisLabelVisible: true,
-      title: 'Grid Floor',
-    });
-
-    // Add Stop Loss Line
-    if (gridConfig.suggestedStopLoss > 0) {
-      candlestickSeries.createPriceLine({
-        price: gridConfig.suggestedStopLoss,
-        color: '#f43f5e',
-        lineWidth: 1,
-        lineStyle: LineStyle.LargeDashed,
-        axisLabelVisible: true,
-        title: 'Stop-Loss (Heuristic)',
-      });
-    }
-
-    // Add subtle intermediate grid lines (sample 4-8 levels)
-    const levels = gridConfig.levels;
-    if (levels.length > 2) {
-      const stepInterval = Math.max(1, Math.floor(levels.length / 6));
-      for (let i = stepInterval; i < levels.length - 1; i += stepInterval) {
-        candlestickSeries.createPriceLine({
-          price: levels[i],
-          color: '#222d40',
-          lineWidth: 1,
-          lineStyle: LineStyle.Dotted,
-          axisLabelVisible: false,
-          title: '',
+    for (const c of candles) {
+      const timeSec = Math.floor(c.time / 1000) as UTCTimestamp;
+      if (!seenTimes.has(timeSec) && Number.isFinite(c.open) && Number.isFinite(c.high)) {
+        seenTimes.add(timeSec);
+        formattedData.push({
+          time: timeSec,
+          open: c.open,
+          high: c.high,
+          low: c.low,
+          close: c.close,
         });
       }
     }
 
-    // Handle responsive container resize
+    formattedData.sort((a, b) => (a.time as number) - (b.time as number));
+
+    if (formattedData.length > 0) {
+      candlestickSeries.setData(formattedData);
+      chart.timeScale().fitContent();
+    }
+
     const handleResize = () => {
-      if (container && chart) {
-        chart.applyOptions({ width: container.clientWidth });
+      if (container && chartInstanceRef.current) {
+        chartInstanceRef.current.applyOptions({ width: container.clientWidth });
       }
     };
 
     window.addEventListener('resize', handleResize);
-    chart.timeScale().fitContent();
 
     return () => {
       window.removeEventListener('resize', handleResize);
-      chart.remove();
+      if (chartInstanceRef.current) {
+        try {
+          chartInstanceRef.current.remove();
+        } catch (err) {}
+        chartInstanceRef.current = null;
+        seriesRef.current = null;
+        priceLinesRef.current = [];
+      }
     };
-  }, [candles, gridConfig]);
+  }, [candles]);
+
+  // 2. Dynamically update price lines when gridConfig changes (Without destroying the chart canvas)
+  useEffect(() => {
+    const series = seriesRef.current;
+    if (!series || !gridConfig) return;
+
+    // Remove existing price lines safely
+    for (const line of priceLinesRef.current) {
+      try {
+        series.removePriceLine(line);
+      } catch (e) {}
+    }
+    priceLinesRef.current = [];
+
+    // Add Range Bounds (Ceiling & Floor)
+    if (Number.isFinite(gridConfig.range?.upper)) {
+      try {
+        priceLinesRef.current.push(
+          series.createPriceLine({
+            price: gridConfig.range.upper,
+            color: '#10b981',
+            lineWidth: 2,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: 'Grid Ceiling',
+          })
+        );
+      } catch (e) {}
+    }
+
+    if (Number.isFinite(gridConfig.range?.lower)) {
+      try {
+        priceLinesRef.current.push(
+          series.createPriceLine({
+            price: gridConfig.range.lower,
+            color: '#ef4444',
+            lineWidth: 2,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: 'Grid Floor',
+          })
+        );
+      } catch (e) {}
+    }
+
+    // Add Stop Loss Line
+    if (Number.isFinite(gridConfig.suggestedStopLoss) && gridConfig.suggestedStopLoss > 0) {
+      try {
+        priceLinesRef.current.push(
+          series.createPriceLine({
+            price: gridConfig.suggestedStopLoss,
+            color: '#f43f5e',
+            lineWidth: 1,
+            lineStyle: LineStyle.LargeDashed,
+            axisLabelVisible: true,
+            title: 'Stop-Loss',
+          })
+        );
+      } catch (e) {}
+    }
+
+    // Add subtle intermediate grid lines (sample 4-8 levels)
+    const levels = gridConfig.levels;
+    if (Array.isArray(levels) && levels.length > 2) {
+      const stepInterval = Math.max(1, Math.floor(levels.length / 6));
+      for (let i = stepInterval; i < levels.length - 1; i += stepInterval) {
+        if (Number.isFinite(levels[i])) {
+          try {
+            priceLinesRef.current.push(
+              series.createPriceLine({
+                price: levels[i],
+                color: '#222d40',
+                lineWidth: 1,
+                lineStyle: LineStyle.Dotted,
+                axisLabelVisible: false,
+                title: '',
+              })
+            );
+          } catch (e) {}
+        }
+      }
+    }
+  }, [gridConfig]);
 
   return (
     <div className="bg-dark-850 rounded-xl border border-dark-700 overflow-hidden p-4">
@@ -187,15 +254,15 @@ export const CandlestickChart: React.FC<CandlestickChartProps> = ({
         <div className="flex items-center space-x-4 text-[11px] text-slate-400">
           <span className="flex items-center gap-1.5">
             <span className="w-2.5 h-0.5 bg-emerald-400 inline-block" />
-            Ceiling (${gridConfig.range.upper.toFixed(2)})
+            Ceiling (${gridConfig?.range?.upper?.toFixed(2) ?? '0.00'})
           </span>
           <span className="flex items-center gap-1.5">
             <span className="w-2.5 h-0.5 bg-rose-400 inline-block" />
-            Floor (${gridConfig.range.lower.toFixed(2)})
+            Floor (${gridConfig?.range?.lower?.toFixed(2) ?? '0.00'})
           </span>
           <span className="flex items-center gap-1.5">
             <span className="w-2.5 h-0.5 bg-rose-600 border-dashed inline-block" />
-            Stop (${gridConfig.suggestedStopLoss.toFixed(2)})
+            Stop (${gridConfig?.suggestedStopLoss?.toFixed(2) ?? '0.00'})
           </span>
         </div>
       </div>
