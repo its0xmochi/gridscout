@@ -56,17 +56,18 @@ export default function HomePage() {
     return null;
   }, []);
 
-  const handleManualScan = async () => {
+  const handleManualScan = async (customMinVol?: number) => {
     if (refreshing) return;
+    const targetVol = customMinVol ?? minVolume;
     setRefreshing(true);
-    setScanMessage('Initiating universe scan...');
+    setScanMessage(`Initiating scan (min volume $${Math.round(targetVol / 1000)}k)...`);
     setError(null);
 
     try {
       const res = await fetch('/api/scan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ force: true }),
+        body: JSON.stringify({ force: true, minVolumeUsd: targetVol }),
       });
       const data = await res.json();
 
@@ -242,7 +243,7 @@ export default function HomePage() {
   return (
     <div className="min-h-screen flex flex-col bg-dark-900">
       <Navbar
-        onRefresh={handleManualScan}
+        onRefresh={() => handleManualScan()}
         isRefreshing={refreshing || status?.isScanning}
         lastUpdated={snapshot?.timestamp}
       />
@@ -285,9 +286,9 @@ export default function HomePage() {
           />
           <MetricCard
             title="ELIGIBLE GRID MARKETS"
-            value={snapshot ? snapshot.eligibleCount : '...'}
-            subtitle={`Filtered from ${snapshot?.totalDiscovered || 0} discovered perps`}
-            badge="Min $250k Vol"
+            value={snapshot ? eligibleMarkets.length : '...'}
+            subtitle={`Filtered with >=$${(minVolume / 1000).toFixed(0)}k vol from ${snapshot?.totalDiscovered || 0} perps`}
+            badge={`Min $${(minVolume / 1000).toFixed(0)}k Vol`}
             badgeColor="sky"
           />
           <MetricCard
@@ -299,7 +300,7 @@ export default function HomePage() {
           />
           <MetricCard
             title="UNIVERSE HEALTH"
-            value={snapshot ? `${Math.round((snapshot.eligibleCount / Math.max(1, snapshot.totalDiscovered)) * 100)}%` : '...'}
+            value={snapshot ? `${Math.round((eligibleMarkets.length / Math.max(1, snapshot.totalDiscovered)) * 100)}%` : '...'}
             subtitle={`${snapshot?.excludedCount || 0} excluded • ${snapshot?.insufficientDataCount || 0} insufficient data`}
             badge="Data Quality"
             badgeColor="emerald"
@@ -323,6 +324,8 @@ export default function HomePage() {
           onFeePresetChange={setFeePreset}
           onlyInRange={onlyInRange}
           onOnlyInRangeChange={setOnlyInRange}
+          onRescan={() => handleManualScan(minVolume)}
+          isScanning={refreshing || status?.isScanning}
         />
 
         {/* Tab Navigation */}
@@ -401,7 +404,7 @@ export default function HomePage() {
             </p>
             <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-3">
               <button
-                onClick={handleManualScan}
+                onClick={() => handleManualScan()}
                 disabled={refreshing}
                 className="inline-flex items-center space-x-2 px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm transition-all active:scale-95 disabled:opacity-50"
               >

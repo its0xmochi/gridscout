@@ -1,7 +1,7 @@
 'use client';
 
 import React from 'react';
-import { Search, Filter, SlidersHorizontal } from 'lucide-react';
+import { Search, RefreshCw } from 'lucide-react';
 import { RangeType } from '../lib/analytics/ranges';
 
 interface DashboardFiltersProps {
@@ -20,6 +20,8 @@ interface DashboardFiltersProps {
   onFeePresetChange: (preset: 'default' | 'vip') => void;
   onlyInRange: boolean;
   onOnlyInRangeChange: (val: boolean) => void;
+  onRescan?: () => void;
+  isScanning?: boolean;
 }
 
 export const DashboardFilters: React.FC<DashboardFiltersProps> = ({
@@ -38,10 +40,12 @@ export const DashboardFilters: React.FC<DashboardFiltersProps> = ({
   onFeePresetChange,
   onlyInRange,
   onOnlyInRangeChange,
+  onRescan,
+  isScanning = false,
 }) => {
   return (
     <div className="bg-dark-850 p-4 rounded-xl border border-dark-700 space-y-4">
-      {/* Top row: Search and DEX tabs */}
+      {/* Top row: Search, DEX tabs, and Rescan button */}
       <div className="flex flex-col md:flex-row gap-3 items-stretch md:items-center justify-between">
         {/* Search */}
         <div className="relative flex-1 max-w-md">
@@ -55,31 +59,45 @@ export const DashboardFilters: React.FC<DashboardFiltersProps> = ({
           />
         </div>
 
-        {/* DEX Selector Pills */}
-        <div className="flex items-center gap-1.5 overflow-x-auto pb-1 md:pb-0">
-          <button
-            onClick={() => onSelectDex('all')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
-              selectedDex === 'all'
-                ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
-                : 'bg-dark-800 text-slate-400 hover:text-slate-200 border border-dark-700'
-            }`}
-          >
-            All DEXes
-          </button>
-          {dexes.map((dex) => (
+        {/* DEX Selector Pills & Rescan with Filters */}
+        <div className="flex items-center gap-2 overflow-x-auto pb-1 md:pb-0">
+          <div className="flex items-center gap-1.5">
             <button
-              key={dex}
-              onClick={() => onSelectDex(dex)}
+              onClick={() => onSelectDex('all')}
               className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
-                selectedDex === dex
+                selectedDex === 'all'
                   ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
                   : 'bg-dark-800 text-slate-400 hover:text-slate-200 border border-dark-700'
               }`}
             >
-              {dex.toUpperCase()}
+              All DEXes
             </button>
-          ))}
+            {dexes.map((dex) => (
+              <button
+                key={dex}
+                onClick={() => onSelectDex(dex)}
+                className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors whitespace-nowrap ${
+                  selectedDex === dex
+                    ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/40'
+                    : 'bg-dark-800 text-slate-400 hover:text-slate-200 border border-dark-700'
+                }`}
+              >
+                {dex.toUpperCase()}
+              </button>
+            ))}
+          </div>
+
+          {onRescan && (
+            <button
+              onClick={onRescan}
+              disabled={isScanning}
+              className="inline-flex items-center space-x-1.5 px-3 py-1.5 rounded-lg bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 border border-emerald-500/40 font-semibold text-xs transition-all active:scale-95 disabled:opacity-50 whitespace-nowrap ml-2 shadow-sm"
+              title="Trigger a new scan applying current volume and settings"
+            >
+              <RefreshCw className={`w-3.5 h-3.5 ${isScanning ? 'animate-spin' : ''}`} />
+              <span>{isScanning ? 'Scanning...' : 'Rescan with Filters'}</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -87,7 +105,7 @@ export const DashboardFilters: React.FC<DashboardFiltersProps> = ({
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 pt-3 border-t border-dark-750 text-xs">
         {/* Min 24h Volume */}
         <div>
-          <label className="block text-slate-400 font-medium mb-1 flex justify-between">
+          <label className="text-slate-400 font-medium mb-1 flex justify-between">
             <span>Min 24h Volume</span>
             <span className="text-emerald-400">${(minVolume / 1000).toFixed(0)}k</span>
           </label>
@@ -104,7 +122,7 @@ export const DashboardFilters: React.FC<DashboardFiltersProps> = ({
 
         {/* Min Suitability Score */}
         <div>
-          <label className="block text-slate-400 font-medium mb-1 flex justify-between">
+          <label className="text-slate-400 font-medium mb-1 flex justify-between">
             <span>Min Score</span>
             <span className="text-emerald-400">{minScore} / 100</span>
           </label>
@@ -151,7 +169,7 @@ export const DashboardFilters: React.FC<DashboardFiltersProps> = ({
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              Standard (0.015/0.045%)
+              Standard (0.015%)
             </button>
             <button
               onClick={() => onFeePresetChange('vip')}
@@ -161,7 +179,7 @@ export const DashboardFilters: React.FC<DashboardFiltersProps> = ({
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
-              VIP (0.003/0.009%)
+              VIP (0.003%)
             </button>
           </div>
         </div>

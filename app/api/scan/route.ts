@@ -32,6 +32,8 @@ export async function POST(req: Request) {
     const body = await req.json().catch(() => ({}));
     const force = body.force === true;
     const isSync = body.sync === true;
+    const minVolumeUsd = typeof body.minVolumeUsd === 'number' ? body.minVolumeUsd : undefined;
+    const scanOptions = minVolumeUsd ? { minVolumeUsd } : undefined;
 
     // Check if an existing job is currently running to prevent duplicate work
     const activeJob = await globalDb.getActiveJob();
@@ -62,7 +64,7 @@ export async function POST(req: Request) {
 
     if (isSync) {
       // Synchronous execution (useful for testing or direct CLI invocation)
-      const snapshot = await globalScanner.runScan(force);
+      const snapshot = await globalScanner.runScan(force, scanOptions);
       return NextResponse.json({
         success: true,
         scanId: snapshot.id,
@@ -75,7 +77,7 @@ export async function POST(req: Request) {
     // Keeps the serverless worker alive until the scan completes
     after(async () => {
       try {
-        await globalScanner.runScan(force);
+        await globalScanner.runScan(force, scanOptions);
       } catch (scanErr: any) {
         console.error('[API/Scan] Background scan failed:', scanErr);
       }

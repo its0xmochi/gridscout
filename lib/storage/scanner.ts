@@ -71,14 +71,17 @@ export class MarketScanner {
   /**
    * Triggers a scan. Deduplicates overlapping calls across instances.
    */
-  public async runScan(forceRefresh: boolean = false): Promise<ScanSnapshot> {
+  public async runScan(
+    forceRefresh: boolean = false,
+    options?: { minVolumeUsd?: number }
+  ): Promise<ScanSnapshot> {
     if (this.isScanning && this.currentScanPromise) {
       console.log('[MarketScanner] Scan already in progress locally; reusing in-flight promise.');
       return this.currentScanPromise;
     }
 
     this.isScanning = true;
-    this.currentScanPromise = this.executeScanSafe(forceRefresh).finally(() => {
+    this.currentScanPromise = this.executeScanSafe(forceRefresh, options).finally(() => {
       this.isScanning = false;
       this.currentScanPromise = null;
     });
@@ -86,7 +89,10 @@ export class MarketScanner {
     return this.currentScanPromise;
   }
 
-  private async executeScanSafe(forceRefresh: boolean): Promise<ScanSnapshot> {
+  private async executeScanSafe(
+    forceRefresh: boolean,
+    options?: { minVolumeUsd?: number }
+  ): Promise<ScanSnapshot> {
     const now = Date.now();
     this.lastScanAttemptAt = now;
 
@@ -104,10 +110,13 @@ export class MarketScanner {
       return latest;
     }
 
-    return this.executeScanInternal(now);
+    return this.executeScanInternal(now, options);
   }
 
-  private async executeScanInternal(startTime: number): Promise<ScanSnapshot> {
+  private async executeScanInternal(
+    startTime: number,
+    options?: { minVolumeUsd?: number }
+  ): Promise<ScanSnapshot> {
     const scanId = `scan_${startTime}`;
     console.log(`[MarketScanner] Starting universe scan (${scanId})...`);
 
@@ -162,12 +171,14 @@ export class MarketScanner {
       dexSet.add(m.dex);
     }
 
+    const effectiveMinVolume = options?.minVolumeUsd ?? this.config.minVolumeUsd;
+
     // Partition markets into excluded vs eligible candidates
     const excludedCandidates: Market[] = [];
     const eligibleCandidates: Market[] = [];
 
     for (const m of allMarkets) {
-      if (m.dayNtlVlm < this.config.minVolumeUsd || m.isRestricted) {
+      if (m.dayNtlVlm < effectiveMinVolume || m.isRestricted) {
         excludedCandidates.push(m);
       } else {
         eligibleCandidates.push(m);
