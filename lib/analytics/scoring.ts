@@ -7,8 +7,9 @@ import {
   calculateKaufmanER,
   calculateRollingMedianCrossingsPerDay,
   calculateTailAndBreakoutRisk,
+  filterActiveCandles,
 } from './indicators';
-import { GridConfig, RangeType } from './ranges';
+import { GridConfig } from './ranges';
 
 export interface ScoreBreakdown {
   rangeBoundness: number; // Max 25
@@ -24,11 +25,17 @@ export interface MarketScoreResult {
   marketId: string;
   symbol: string;
   dex: string;
-  technicalScore: number; // 0-100
-  combinedScore: number; // 0-100 combining technical + backtest
+  technicalScore: number; // 0-100 technical suitability
+  combinedScore: number; // 0-100 overall ranking score (profit per $1 + technical)
+  netDailyProfitPerDollar: number; // Primary ranking metric
   breakdown: ScoreBreakdown;
   isEligible: boolean;
   exclusionReason?: string;
+  isExcludedFromTopOpportunity: boolean;
+  topOpportunityExclusionReason?: string;
+  rangePositionStatus: 'sweet_spot' | 'near_edge' | 'outside';
+  rangePositionLabel: string;
+  targetModeEligible: boolean;
   isProvisional: boolean;
   warnings: string[];
   metrics: {
@@ -45,10 +52,13 @@ export interface MarketScoreResult {
     priceLocationPct: number;
     isPriceOutsideRange: boolean;
     fundingApr: number;
+    fundingRelativeBaselineApr: number;
+    fundingDeviationPoints: number;
     isExtremeFunding: boolean;
     dayNtlVlm: number;
     openInterestNotional: number;
     spreadBps?: number;
+    flatCandleRatio: number;
   };
 }
 
@@ -57,9 +67,11 @@ export interface ScoringOptions {
   minHistoryCandles?: number;
 }
 
+export const HYPERLIQUID_FUNDING_BASELINE_APR = 0.1095; // 10.95% annual baseline
+
 export function evaluateMarketSuitability(
   market: Market,
-  candles1h: Candle[],
+  rawCandles: Candle[],
   gridConfig: GridConfig,
   backtest3d?: BacktestResult,
   backtest7d?: BacktestResult,
@@ -70,9 +82,17 @@ export function evaluateMarketSuitability(
   const minHistory = options.minHistoryCandles ?? 72; // at least 3 days of 1h
   const warnings: string[] = [];
 
-  // Check data sufficiency
+  // Filter flat closed-market candles
+  const { activeCandles: candles1h, flatRatio } = filterActiveCandles(rawCandles);
+
   const hasSufficientHistory = candles1h.length >= minHistory;
-  const isProvisional = candles1h.length < 168; // less than 7 days
+  const isProvisional = candles1h.length < 168;
+
+  if (flatRatio > 0.25) {
+    warnings.push(
+      `${(flatRatio * 100).toFixed(1)}% of historical candles had zero trading activity (closed market).`
+    );
+  }
 
   if (!hasSufficientHistory) {
     return {
@@ -81,6 +101,7 @@ export function evaluateMarketSuitability(
       dex: market.dex,
       technicalScore: 0,
       combinedScore: 0,
+      netDailyProfitPerDollar: 0,
       breakdown: {
         rangeBoundness: 0,
         meanReversion: 0,
@@ -91,7 +112,12 @@ export function evaluateMarketSuitability(
         currentState: 0,
       },
       isEligible: false,
-      exclusionReason: `Insufficient candle history (${candles1h.length} bars < ${minHistory} minimum required)`,
+      exclusionReason: `Insufficient active candle history (${candles1h.length} bars < ${minHistory} minimum required)`,
+      isExcludedFromTopOpportunity: true,
+      topOpportunityExclusionReason: 'Insufficient candle history',
+      rangePositionStatus: 'outside',
+      rangePositionLabel: 'No data',
+      targetModeEligible: false,
       isProvisional: true,
       warnings: ['Insufficient history for statistical evaluation.'],
       metrics: {
@@ -108,141 +134,231 @@ export function evaluateMarketSuitability(
         priceLocationPct: 50,
         isPriceOutsideRange: false,
         fundingApr: market.fundingApr,
-        isExtremeFunding: Math.abs(market.fundingApr) > 0.5,
+        fundingRelativeBaselineApr: market.fundingApr - HYPERLIQUID_FUNDING_BASELINE_APR,
+        fundingDeviationPoints:
+          Math.abs(market.fundingApr - HYPERLIQUID_FUNDING_BASELINE_APR) * 100,
+        isExtremeFunding: false,
         dayNtlVlm: market.dayNtlVlm,
         openInterestNotional: market.openInterestNotional,
+        flatCandleRatio: flatRatio,
       },
     };
   }
 
-  // 1. Technical Indicator Calculations
-  const er14d = calculateKaufmanER(candles1h, Math.min(336, candles1h.length - 1));
-  const er3d = calculateKaufmanER(candles1h, Math.min(72, candles1h.length - 1));
+  // 1. Core Quantitative Indicators
+  const er14d = calculateKaufmanER(candles1h, 168);
+  const er3d = calculateKaufmanER(candles1h, 72);
   const adx14 = calculateADX(candles1h, 14);
   const { pctInBand } = calculateClosesInPercentileBand(candles1h, 168);
   const { crossingsPerDay } = calculateRollingMedianCrossingsPerDay(candles1h, 24);
   const { atr } = calculateATR(candles1h, 14);
   const atrPct = market.markPx > 0 ? (atr / market.markPx) * 100 : 0;
-  const tailRisk = calculateTailAndBreakoutRisk(candles1h, 336);
+  const tailRisk = calculateTailAndBreakoutRisk(candles1h, 168);
 
-  // Price location in range: 0% at lower, 100% at upper
+  // Price position inside proposed range
   const rangeWidth = gridConfig.range.upper - gridConfig.range.lower;
-  const priceLocationPct = rangeWidth > 0
-    ? ((market.markPx - gridConfig.range.lower) / rangeWidth) * 100
-    : 50;
-  const isPriceOutsideRange = market.markPx < gridConfig.range.lower || market.markPx > gridConfig.range.upper;
-  const isExtremeFunding = Math.abs(market.fundingApr) > 0.5; // > 50% absolute APR
+  let priceLocationPct = 50;
+  if (rangeWidth > 0) {
+    priceLocationPct = ((market.markPx - gridConfig.range.lower) / rangeWidth) * 100;
+  }
+  const isPriceOutsideRange =
+    market.markPx < gridConfig.range.lower || market.markPx > gridConfig.range.upper;
 
-  // 2. Score Components
+  // 2. Scoring Breakdown Components
   // A. Range-boundness (Max 25)
-  // Low ER is favorable (0.15 is ideal, 0.7 is pure trend)
-  const weightedER = 0.6 * er14d + 0.4 * er3d;
-  const erScore = Math.max(0, Math.min(15, 15 * (1 - (weightedER - 0.15) / 0.55)));
-  // Low ADX is favorable (< 18 ideal, > 35 trending)
-  const adxScore = Math.max(0, Math.min(5, 5 * (1 - (adx14 - 18) / 17)));
-  // Percentile band closeness (80% default, 85%+ gives max 5)
-  const bandScore = Math.max(0, Math.min(5, ((pctInBand - 65) / 20) * 5));
-  const rangeBoundness = Math.round((erScore + adxScore + bandScore) * 10) / 10;
+  let rangeBoundness = 0;
+  rangeBoundness += Math.max(0, 10 * (1 - er14d));
+  rangeBoundness += Math.max(0, 5 * (1 - er3d));
+  if (adx14 <= 15) rangeBoundness += 5;
+  else if (adx14 <= 25) rangeBoundness += 3.5;
+  else if (adx14 <= 35) rangeBoundness += 1.5;
+  rangeBoundness += (pctInBand / 100) * 5;
+  rangeBoundness = Math.round(rangeBoundness * 10) / 10;
 
   // B. Mean Reversion (Max 15)
-  // >= 4 crossings per day gives full 15 points
-  const meanReversion = Math.round(Math.min(15, Math.max(0, crossingsPerDay * 3.75)) * 10) / 10;
+  let meanReversion = 0;
+  if (crossingsPerDay >= 3.0) meanReversion = 15;
+  else if (crossingsPerDay >= 2.0) meanReversion = 12;
+  else if (crossingsPerDay >= 1.0) meanReversion = 8;
+  else if (crossingsPerDay >= 0.5) meanReversion = 4;
+  else meanReversion = 1;
+  meanReversion = Math.round(meanReversion * 10) / 10;
 
-  // C. Swing Size vs Fees (Max 20)
-  // Requires step % to safely beat fees
+  // C. Swing vs Fees (Max 20)
   let swingVsFees = 0;
-  if (gridConfig.isValid && gridConfig.stepPct > 0) {
-    const feeRatio = gridConfig.stepPct / Math.max(0.01, gridConfig.roundTripFeePct);
-    // feeRatio >= 12 gives full 20, 6 gives 8
-    swingVsFees = Math.min(20, Math.max(0, 8 + ((feeRatio - 6) / 6) * 12));
-  }
+  const stepPct = gridConfig.stepPct;
+  const roundTripFeePct = gridConfig.roundTripFeePct;
+  const feeRatio = roundTripFeePct > 0 ? stepPct / roundTripFeePct : 0;
+
+  if (feeRatio >= 15) swingVsFees = 20;
+  else if (feeRatio >= 10) swingVsFees = 17;
+  else if (feeRatio >= 6) swingVsFees = 13;
+  else if (feeRatio >= 3) swingVsFees = 6;
+  else swingVsFees = 0;
   swingVsFees = Math.round(swingVsFees * 10) / 10;
 
-  // D. Liquidity (Max 15)
-  // Log scale for volume between 250k and 20M
-  let volumeScore = 0;
-  if (market.dayNtlVlm >= minVolume) {
-    const logMin = Math.log10(minVolume);
-    const logMax = Math.log10(20000000);
-    const logCur = Math.log10(market.dayNtlVlm);
-    volumeScore = Math.min(10, Math.max(2, ((logCur - logMin) / (logMax - logMin)) * 10));
-  }
-  // OI notional up to 3 pts
-  const oiScore = Math.min(3, Math.max(0, (market.openInterestNotional / 2000000) * 3));
-  // Spread up to 2 pts
-  let spreadScore = 1.0;
-  if (orderBook && orderBook.spreadBps > 0) {
-    if (orderBook.spreadBps <= 5) spreadScore = 2.0;
-    else if (orderBook.spreadBps <= 15) spreadScore = 1.5;
-    else spreadScore = 0.5;
-  }
-  const liquidity = Math.round((volumeScore + oiScore + spreadScore) * 10) / 10;
+  // D. Liquidity & Execution (Max 15)
+  let liquidity = 0;
+  if (market.dayNtlVlm >= 10000000) liquidity += 8;
+  else if (market.dayNtlVlm >= 2000000) liquidity += 6;
+  else if (market.dayNtlVlm >= 500000) liquidity += 4;
+  else liquidity += 2;
 
-  // E. Tail and Breakout Risk (Max 15)
-  let riskScore = 15;
-  if (tailRisk.atrExceedCount > 0) {
-    riskScore -= Math.min(5, tailRisk.atrExceedCount * 2.5);
-  }
-  if (Math.abs(tailRisk.worstRolling24hDrawdownPct) > 15) {
-    riskScore -= 3;
-  }
-  if (tailRisk.hasRecent6hBreakout) {
-    riskScore -= 5;
-    warnings.push('Price broke 7-day high/low in the last 6 hours.');
-  }
-  const tailRiskScore = Math.round(Math.max(0, riskScore) * 10) / 10;
+  if (market.openInterestNotional >= 5000000) liquidity += 5;
+  else if (market.openInterestNotional >= 1000000) liquidity += 3.5;
+  else if (market.openInterestNotional >= 200000) liquidity += 2;
+  else liquidity += 1;
 
-  // F. Funding (Max 5)
+  if (orderBook && orderBook.spreadBps <= 5) liquidity += 2;
+  else if (orderBook && orderBook.spreadBps <= 15) liquidity += 1;
+  else if (!orderBook) liquidity += 1.5;
+  liquidity = Math.round(liquidity * 10) / 10;
+
+  // E. Tail Risk & Breakout Safety (Max 15)
+  let tailRiskScore = 15;
+  if (tailRisk.maxSingleCandleMovePct > 12) tailRiskScore -= 6;
+  else if (tailRisk.maxSingleCandleMovePct > 7) tailRiskScore -= 3;
+
+  if (tailRisk.atrExceedCount > 8) tailRiskScore -= 5;
+  else if (tailRisk.atrExceedCount > 4) tailRiskScore -= 2.5;
+
+  if (tailRisk.worstRolling24hDrawdownPct < -25) tailRiskScore -= 4;
+  else if (tailRisk.worstRolling24hDrawdownPct < -15) tailRiskScore -= 2;
+
+  tailRiskScore = Math.round(Math.max(0, tailRiskScore) * 10) / 10;
+
+  // F. Funding Rate Stability (Max 5)
+  const fundingRelativeBaselineApr = market.fundingApr - HYPERLIQUID_FUNDING_BASELINE_APR;
+  const fundingDeviationPoints = Math.abs(fundingRelativeBaselineApr) * 100;
   let fundingScore = 5;
-  const absApr = Math.abs(market.fundingApr);
-  if (absApr > 0.5) {
+
+  if (fundingDeviationPoints > 40) {
     fundingScore = 0;
-    warnings.push(`Extreme funding rate: ${(market.fundingApr * 100).toFixed(1)}% APR.`);
-  } else if (absApr > 0.25) {
+  } else if (fundingDeviationPoints > 20) {
     fundingScore = 2;
-  } else if (absApr > 0.1) {
+  } else if (fundingDeviationPoints > 10) {
     fundingScore = 3.5;
   }
   const funding = Math.round(fundingScore * 10) / 10;
 
-  // G. Current State (Max 5)
+  // G. Current State & Range Position (Max 5)
   let currentState = 5;
+  let rangePositionStatus: 'sweet_spot' | 'near_edge' | 'outside' = 'sweet_spot';
+  let rangePositionLabel = 'In Range (30-70%)';
+
   if (isPriceOutsideRange) {
     currentState = 0;
-    warnings.push(`Current price ($${market.markPx.toFixed(4)}) is OUTSIDE the suggested range.`);
-  } else if (priceLocationPct < 25 || priceLocationPct > 75) {
-    currentState = 2.5; // near borders
+    rangePositionStatus = 'outside';
+    rangePositionLabel = 'Outside Range';
+    warnings.push(
+      `Current price ($${market.markPx}) is OUTSIDE the suggested range [${gridConfig.range.lower}, ${gridConfig.range.upper}].`
+    );
+  } else if (priceLocationPct < 15 || priceLocationPct > 85) {
+    // Heavy penalty for extreme proximity to boundary (above 85% or below 15%)
+    currentState = 1.0;
+    rangePositionStatus = 'near_edge';
+    rangePositionLabel = priceLocationPct < 15 ? 'Near lower edge' : 'Near upper edge';
+    warnings.push(
+      `Price at ${priceLocationPct.toFixed(1)}% of range (${rangePositionLabel}): high risk of boundary exit.`
+    );
+  } else if (priceLocationPct < 30 || priceLocationPct > 70) {
+    currentState = 2.5;
+    rangePositionStatus = 'near_edge';
+    rangePositionLabel = 'Near upper/lower edge';
+  } else {
+    // Sweet spot: 30% - 70% of suggested range
+    currentState = 5.0;
+    rangePositionStatus = 'sweet_spot';
+    rangePositionLabel = 'In Range (Sweet Spot)';
   }
-  currentState = Math.round(currentState * 10) / 10;
 
   // Raw Technical Score (0-100)
-  let rawTechnical = rangeBoundness + meanReversion + swingVsFees + liquidity + tailRiskScore + funding + currentState;
+  let rawTechnical =
+    rangeBoundness +
+    meanReversion +
+    swingVsFees +
+    liquidity +
+    tailRiskScore +
+    funding +
+    currentState;
 
-  // Penalties
-  if (isPriceOutsideRange) {
-    rawTechnical -= 15;
-  }
-  if (tailRisk.hasRecent6hBreakout) {
-    rawTechnical -= 10;
-  }
+  // Edge / Breakout Penalties
+  if (isPriceOutsideRange) rawTechnical -= 20;
+  else if (priceLocationPct < 15 || priceLocationPct > 85) rawTechnical -= 15;
+  else if (priceLocationPct < 30 || priceLocationPct > 70) rawTechnical -= 6;
+
+  if (tailRisk.hasRecent6hBreakout) rawTechnical -= 10;
+
   const technicalScore = Math.round(Math.max(0, Math.min(100, rawTechnical)));
 
-  // 3. Combined Score with Backtest Integration
+  // 3. Top Opportunity Exclusion Rules
+  let isExcludedFromTopOpportunity = false;
+  let topOpportunityExclusionReason: string | undefined;
+
+  // Rule 1: |24h change| > 12%
+  if (Math.abs(market.change24h) > 0.12) {
+    isExcludedFromTopOpportunity = true;
+    topOpportunityExclusionReason = `|24h change| (${(market.change24h * 100).toFixed(1)}%) exceeds 12% directional move threshold`;
+    warnings.push(
+      `Excluded from Top Opportunity: excessive 24h move (${(market.change24h * 100).toFixed(1)}%).`
+    );
+  }
+
+  // Rule 2: Active breakout flag
+  if (tailRisk.hasRecent6hBreakout) {
+    isExcludedFromTopOpportunity = true;
+    if (!topOpportunityExclusionReason) {
+      topOpportunityExclusionReason = 'Active 6-hour volatility breakout detected';
+    }
+    warnings.push('Excluded from Top Opportunity: price broke 7-day high/low in the last 6 hours.');
+  }
+
+  // Rule 3: Funding deviation > 40 points from 10.95% baseline
+  if (fundingDeviationPoints > 40) {
+    isExcludedFromTopOpportunity = true;
+    if (!topOpportunityExclusionReason) {
+      topOpportunityExclusionReason = `Funding APR (${(market.fundingApr * 100).toFixed(1)}%) is ${fundingDeviationPoints.toFixed(1)} points away from 10.95% baseline`;
+    }
+    warnings.push(
+      `Excluded from Top Opportunity: extreme funding divergence (${fundingDeviationPoints.toFixed(1)} points from 10.95% APR baseline).`
+    );
+  }
+
+  // 4. Combined Score with Profit per $1 of Position Size
   let combinedScore = technicalScore;
+  let netDailyProfitPerDollar = 0;
+
   if (backtest7d || backtest3d) {
     const primaryBt = backtest7d || backtest3d!;
+    netDailyProfitPerDollar = primaryBt.netDailyProfitPerDollar || 0;
+
     if (primaryBt.netPnLUsd < 0) {
-      // Strong penalty: negative backtest after costs cannot be a top opportunity
-      combinedScore = Math.min(45, Math.round(technicalScore * 0.5));
-      warnings.push(`Historical backtest had negative net returns (-$${Math.abs(primaryBt.netPnLUsd).toFixed(2)}).`);
+      combinedScore = Math.min(45, Math.round(technicalScore * 0.4));
+      isExcludedFromTopOpportunity = true;
+      if (!topOpportunityExclusionReason) {
+        topOpportunityExclusionReason = 'Negative net backtest after trading costs';
+      }
+      warnings.push(
+        `Historical backtest yielded negative net returns (-$${Math.abs(primaryBt.netPnLUsd).toFixed(2)}). Grid strategy failed to overcome drag.`
+      );
     } else {
-      // Reward positive backtest: scale 0-100 based on net return
-      const btPerformanceScore = Math.min(100, Math.max(0, primaryBt.netDailyReturnPct * 100));
-      combinedScore = Math.round(technicalScore * 0.65 + btPerformanceScore * 0.35);
+      // Scale daily net profit per dollar into a 0-100 factor
+      // A return of 0.002 ($0.002/day per $1 position = 0.2%/day on total size = ~73% APR unleveraged) scores 75
+      const profitRateScore = Math.min(100, Math.max(0, netDailyProfitPerDollar * 35000));
+      combinedScore = Math.round(technicalScore * 0.5 + profitRateScore * 0.5);
     }
   }
 
-  // Eligibility Determination
+  // If excluded from Top Opportunity, ensure combined score is capped at <= 45
+  if (isExcludedFromTopOpportunity) {
+    combinedScore = Math.min(45, combinedScore);
+  }
+
+  // Target Mode eligibility: allows higher-volatility markets with high profit rate
+  const targetModeEligible =
+    atrPct >= 1.5 && netDailyProfitPerDollar > 0.0005 && market.dayNtlVlm >= minVolume;
+
+  // Eligibility determination
   let isEligible = true;
   let exclusionReason: string | undefined;
 
@@ -263,6 +379,7 @@ export function evaluateMarketSuitability(
     dex: market.dex,
     technicalScore,
     combinedScore: Math.max(0, Math.min(100, combinedScore)),
+    netDailyProfitPerDollar,
     breakdown: {
       rangeBoundness,
       meanReversion,
@@ -274,6 +391,11 @@ export function evaluateMarketSuitability(
     },
     isEligible,
     exclusionReason,
+    isExcludedFromTopOpportunity,
+    topOpportunityExclusionReason,
+    rangePositionStatus,
+    rangePositionLabel,
+    targetModeEligible,
     isProvisional,
     warnings,
     metrics: {
@@ -290,10 +412,13 @@ export function evaluateMarketSuitability(
       priceLocationPct: Math.round(priceLocationPct * 10) / 10,
       isPriceOutsideRange,
       fundingApr: Math.round(market.fundingApr * 10000) / 10000,
-      isExtremeFunding,
+      fundingRelativeBaselineApr: Math.round(fundingRelativeBaselineApr * 10000) / 10000,
+      fundingDeviationPoints: Math.round(fundingDeviationPoints * 10) / 10,
+      isExtremeFunding: fundingDeviationPoints > 40,
       dayNtlVlm: market.dayNtlVlm,
       openInterestNotional: market.openInterestNotional,
       spreadBps: orderBook ? Math.round(orderBook.spreadBps * 10) / 10 : undefined,
+      flatCandleRatio: Math.round(flatRatio * 100) / 100,
     },
   };
 }

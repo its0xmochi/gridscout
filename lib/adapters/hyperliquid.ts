@@ -146,7 +146,7 @@ export class HyperliquidAdapter implements ExchangeAdapter {
    */
   public async getCandles(
     coin: string,
-    interval: '1h' | '15m',
+    interval: '1m' | '5m' | '15m' | '1h',
     startTime: number,
     endTime: number
   ): Promise<Candle[]> {
@@ -171,6 +171,14 @@ export class HyperliquidAdapter implements ExchangeAdapter {
 
     const validated: Candle[] = [];
     const seenTimes = new Set<number>();
+    const intervalDurationMs =
+      interval === '1m'
+        ? 60000
+        : interval === '5m'
+        ? 300000
+        : interval === '15m'
+        ? 900000
+        : 3600000;
 
     for (const c of rawCandles) {
       if (!c || typeof c !== 'object') continue;
@@ -196,15 +204,20 @@ export class HyperliquidAdapter implements ExchangeAdapter {
       }
 
       seenTimes.add(t);
+      const vol = Number.isFinite(v) ? v : 0;
+      const numTrades = Number(c.n) || 0;
+      const isFlat = (h - l) <= 1e-6 || vol <= 1e-8 || numTrades === 0;
+
       validated.push({
         time: t,
-        closeTime: Number(c.T) || (t + (interval === '1h' ? 3600000 : 900000)),
+        closeTime: Number(c.T) || (t + intervalDurationMs),
         open: o,
         high: h,
         low: l,
         close: cl,
-        volume: Number.isFinite(v) ? v : 0,
-        numTrades: Number(c.n) || undefined,
+        volume: vol,
+        numTrades: numTrades || undefined,
+        isFlat,
       });
     }
 

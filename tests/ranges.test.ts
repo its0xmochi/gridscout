@@ -82,4 +82,32 @@ describe('Suggested Grid Ranges & Grid Config', () => {
       expect(config.liquidationWarning).toContain('within 3% of the range floor');
     }
   });
+
+  it('generates geometric levels with constant percentage steps', () => {
+    const candles = generateSyntheticCandles(168, 100, 10);
+    const { normal } = calculateGridRanges(candles, 2);
+    const config = buildGridConfig(
+      normal,
+      100,
+      2,
+      20,
+      DEFAULT_FEE_SETTINGS,
+      1.0,
+      1,
+      1000,
+      'geometric'
+    );
+
+    expect(config.spacingType).toBe('geometric');
+    expect(config.levels.length).toBe(21);
+    expect(config.levels[0]).toBe(normal.lower);
+    expect(config.levels[20]).toBe(normal.upper);
+
+    // Verify constant ratio between successive levels
+    const ratio = Math.pow(normal.upper / normal.lower, 1 / 20);
+    const firstStepPct = (config.levels[1] / config.levels[0] - 1) * 100;
+    const lastStepPct = (config.levels[20] / config.levels[19] - 1) * 100;
+
+    expect(Math.abs(firstStepPct - lastStepPct)).toBeLessThan(0.15); // near-identical % step
+  });
 });

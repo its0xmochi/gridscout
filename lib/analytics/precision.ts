@@ -119,3 +119,51 @@ export function validateGridStep(
     ticksInStep,
   };
 }
+
+/**
+ * Calculates estimated isolated liquidation price on Hyperliquid.
+ * Official formula: Maintenance Margin Fraction (MMF) = 1 / (2 * maxLeverage).
+ * Long liquidation occurs when: EntryPrice * (1 - (1 / userLeverage) + MMF).
+ * Returns 0 if unleveraged (userLeverage <= 1).
+ */
+export function calculateIsolatedLiquidationPrice(
+  entryPrice: number,
+  userLeverage: number,
+  maxExchangeLeverage: number = 20,
+  szDecimals: number = 2
+): {
+  liquidationPrice: number;
+  maintenanceMarginFraction: number;
+  distancePct: number;
+  isCloseToLiquidation: boolean;
+  warning?: string;
+} {
+  if (userLeverage <= 1 || entryPrice <= 0) {
+    return {
+      liquidationPrice: 0,
+      maintenanceMarginFraction: 0,
+      distancePct: 100,
+      isCloseToLiquidation: false,
+    };
+  }
+
+  // Hyperliquid maintenance margin fraction: 1 / (2 * maxLeverage)
+  const mmf = 1 / (2 * Math.max(1, maxExchangeLeverage));
+  const rawLiq = entryPrice * (1 - (1 / userLeverage) + mmf);
+  const liquidationPrice = Math.max(0, roundToValidTick(rawLiq, szDecimals));
+  const distancePct = entryPrice > 0 ? ((entryPrice - liquidationPrice) / entryPrice) * 100 : 0;
+  const isCloseToLiquidation = distancePct <= 3.0;
+
+  let warning: string | undefined;
+  if (isCloseToLiquidation) {
+    warning = `Liquidation ($${liquidationPrice}) is only ${distancePct.toFixed(1)}% below entry, indicating severe liquidation risk before defensive stop triggers.`;
+  }
+
+  return {
+    liquidationPrice,
+    maintenanceMarginFraction: mmf,
+    distancePct,
+    isCloseToLiquidation,
+    warning,
+  };
+}

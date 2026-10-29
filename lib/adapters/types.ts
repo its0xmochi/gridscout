@@ -31,6 +31,7 @@ export interface Candle {
   volume: number; // Base volume
   notionalVolume?: number;
   numTrades?: number;
+  isFlat?: boolean; // True if candle represents a closed-market flat/zero-activity bar
 }
 
 export interface OrderBookLevel {
@@ -51,10 +52,12 @@ export interface OrderBook {
   askDepth1PctUsd: number;
 }
 
+export type CandleInterval = '1m' | '5m' | '15m' | '1h';
+
 export interface ExchangeAdapter {
   name: string;
   listMarkets(): Promise<Market[]>;
-  getCandles(coin: string, interval: '1h' | '15m', startTime: number, endTime: number): Promise<Candle[]>;
+  getCandles(coin: string, interval: CandleInterval, startTime: number, endTime: number): Promise<Candle[]>;
   getContext(coin: string): Promise<Market | null>;
   getOrderBook(coin: string): Promise<OrderBook | null>;
 }

@@ -309,7 +309,7 @@ export class MarketScanner {
         progress: {
           current: i,
           total: batchToFetch.length,
-          phase: `Evaluating markets (${i}/${batchToFetch.length})`,
+          phase: `Scanned ${i} / ${batchToFetch.length}`,
         },
       });
 
@@ -485,6 +485,22 @@ export class MarketScanner {
     );
 
     await this.db.saveScan(snapshot);
+
+    // Record forward-test track record for top eligible suggestions
+    for (const m of scannedResults.filter((r) => r.status === 'eligible').slice(0, 5)) {
+      await this.db.recordForwardTest({
+        id: `ft_${m.market.id}_${startTime}`,
+        marketId: m.market.id,
+        symbol: m.market.symbol,
+        dex: m.market.dex,
+        timestamp: startTime,
+        entryPrice: m.market.markPx,
+        lower: m.ranges.normal.lower,
+        upper: m.ranges.normal.upper,
+        gridCount: m.gridConfigNormal.gridCount,
+        spacingType: m.gridConfigNormal.spacingType || 'geometric',
+      }).catch(() => {});
+    }
 
     // Mark job as completed
     await this.db.saveActiveJob({

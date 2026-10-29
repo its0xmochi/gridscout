@@ -126,6 +126,7 @@ describe('Deterministic Scoring & Ranking Engine', () => {
       netPnLUsd: -50, // negative result
       netReturnPct: -5,
       netDailyReturnPct: -0.71,
+      netDailyProfitPerDollar: -0.0071,
       totalTrades: 20,
       completedCycles: 10,
       cyclesPerDay: 1.4,
@@ -133,8 +134,10 @@ describe('Deterministic Scoring & Ranking Engine', () => {
       maxInventoryUnits: 0.006,
       maxUnrealizedLossUsd: -60,
       maxDrawdownPct: 6,
+      maxDrawdownUsd: 60,
       finalEquityUsd: 950,
       rangeExitCount: 2,
+      hasExitedRange: true,
       barsOutsideRange: 10,
       pctTimeOutsideRange: 1.5,
       intrabarAmbiguityBars: 5,
@@ -161,5 +164,47 @@ describe('Deterministic Scoring & Ranking Engine', () => {
     expect(score.metrics.isPriceOutsideRange).toBe(true);
     expect(score.warnings.some((w) => w.includes('OUTSIDE the suggested range'))).toBe(true);
     expect(score.breakdown.currentState).toBe(0);
+  });
+
+  it('excludes market from Top Opportunity when |24h change| > 12%', () => {
+    const volatileMarket = makeMarket({ change24h: 0.15 }); // +15%
+    const candles = makeCandles(200, 80000, 2000);
+    const { normal } = calculateGridRanges(candles, 5);
+    const config = buildGridConfig(normal, 80000, 5);
+
+    const score = evaluateMarketSuitability(volatileMarket, candles, config);
+    expect(score.isExcludedFromTopOpportunity).toBe(true);
+    expect(score.topOpportunityExclusionReason).toContain('exceeds 12%');
+  });
+
+  it('excludes market from Top Opportunity when funding deviates > 40 points from baseline', () => {
+    // 10.95% APR is 0.1095. A funding of 0.60 (60% APR) deviates ~49 points
+    const highFundingMarket = makeMarket({ fundingApr: 0.60 });
+    const candles = makeCandles(200, 80000, 2000);
+    const { normal } = calculateGridRanges(candles, 5);
+    const config = buildGridConfig(normal, 80000, 5);
+
+    const score = evaluateMarketSuitability(highFundingMarket, candles, config);
+    expect(score.isExcludedFromTopOpportunity).toBe(true);
+    expect(score.topOpportunityExclusionReason).toContain('Funding APR');
+  });
+
+  it('rewards price in 30-70% sweet spot and heavily penalizes price < 15% or > 85%', () => {
+    const candles = makeCandles(200, 80000, 2000);
+    const { normal } = calculateGridRanges(candles, 5); // bounds e.g. ~77k to ~83k, mid 80k
+    const config = buildGridConfig(normal, 80000, 5);
+
+    // Sweet spot market at midpoint (50%)
+    const midMarket = makeMarket({ markPx: (normal.lower + normal.upper) / 2 });
+    const midScore = evaluateMarketSuitability(midMarket, candles, config);
+    expect(midScore.rangePositionStatus).toBe('sweet_spot');
+    expect(midScore.breakdown.currentState).toBe(5.0);
+
+    // Extreme edge market near boundary (e.g. 90% of range)
+    const edgePx = normal.lower + (normal.upper - normal.lower) * 0.90;
+    const edgeMarket = makeMarket({ markPx: edgePx });
+    const edgeScore = evaluateMarketSuitability(edgeMarket, candles, config);
+    expect(edgeScore.rangePositionStatus).toBe('near_edge');
+    expect(edgeScore.breakdown.currentState).toBeLessThanOrEqual(1.5);
   });
 });

@@ -8,6 +8,8 @@ import {
   createDefaultStorageAdapter,
 } from './storage-adapter';
 
+import { ForwardTestRecord } from './track-record';
+
 export interface ScannedMarketData {
   market: Market;
   score: MarketScoreResult;
@@ -140,6 +142,32 @@ export class ScanDatabase {
     return (
       scan.markets.find((m) => m.market.id === marketId || m.market.symbol === marketId) || null
     );
+  }
+
+  public async getForwardTests(): Promise<ForwardTestRecord[]> {
+    try {
+      return await this.adapter.getForwardTests();
+    } catch (err) {
+      return [];
+    }
+  }
+
+  public async recordForwardTest(record: ForwardTestRecord): Promise<void> {
+    try {
+      const existing = await this.getForwardTests();
+      const updated = [record, ...existing.filter((r) => r.id !== record.id)].slice(0, 200);
+      await this.adapter.saveForwardTests(updated);
+    } catch (err) {
+      console.error('[ScanDatabase] Failed to record forward test:', err);
+    }
+  }
+
+  public async saveForwardTests(records: ForwardTestRecord[]): Promise<void> {
+    try {
+      await this.adapter.saveForwardTests(records);
+    } catch (err) {
+      console.error('[ScanDatabase] Failed to save forward tests:', err);
+    }
   }
 }
 

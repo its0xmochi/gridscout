@@ -51,7 +51,22 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
 
         <div className="flex items-center space-x-4">
-          <div className="hidden md:flex items-center space-x-2 px-3 py-1 rounded-full bg-dark-800 border border-dark-700 text-xs text-slate-300">
+          <nav className="flex items-center space-x-1 sm:space-x-3 text-xs font-semibold">
+            <Link
+              href="/"
+              className="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
+            >
+              Scanner
+            </Link>
+            <Link
+              href="/track-record"
+              className="px-2.5 py-1.5 rounded-lg text-slate-400 hover:text-sky-400 hover:bg-slate-800 transition-colors"
+            >
+              Track Record
+            </Link>
+          </nav>
+
+          <div className="hidden lg:flex items-center space-x-2 px-3 py-1 rounded-full bg-dark-800 border border-dark-700 text-xs text-slate-300">
             <ShieldCheck className="w-4 h-4 text-emerald-400" />
             <span>Strictly Read-Only</span>
             <span className="text-slate-600">|</span>

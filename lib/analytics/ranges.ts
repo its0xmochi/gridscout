@@ -1,8 +1,20 @@
 import { Candle } from '../adapters/types';
 import { calculateATR, calculatePercentile } from './indicators';
-import { getMinTickSize, roundToValidTick, validateGridStep } from './precision';
+import {
+  getMinTickSize,
+  roundToValidTick,
+  validateGridStep,
+  calculateIsolatedLiquidationPrice,
+} from './precision';
 
 export type RangeType = 'tight' | 'normal' | 'safe';
+export type GridSpacingType = 'geometric' | 'arithmetic';
+
+// Candidate grid counts: every even number from 4 to 100
+export const CANDIDATE_GRID_COUNTS: number[] = Array.from(
+  { length: 49 },
+  (_, i) => (i + 2) * 2
+); // 4, 6, 8, ..., 100
 
 export interface GridRange {
   type: RangeType;
@@ -20,9 +32,10 @@ export interface GridRange {
 
 export interface GridConfig {
   range: GridRange;
-  gridCount: number; // Even integer between 10 and 100
-  stepPrice: number;
-  stepPct: number;
+  gridCount: number; // Even integer between 4 and 100
+  spacingType: GridSpacingType; // geometric (default) or arithmetic
+  stepPrice: number; // Average price difference between levels
+  stepPct: number; // Constant % step for geometric, average % for arithmetic
   levels: number[];
   isValid: boolean;
   validationReason?: string;
@@ -74,9 +87,8 @@ export function calculateGridRanges(
   currentPrice: number;
 } {
   const windowCandles = candles.slice(-lookbackBars);
-  const currentPrice = windowCandles.length > 0
-    ? windowCandles[windowCandles.length - 1].close
-    : 0;
+  const currentPrice =
+    windowCandles.length > 0 ? windowCandles[windowCandles.length - 1].close : 0;
 
   const { atr } = calculateATR(windowCandles, 14);
   const atrBuffer = 0.5 * atr;
@@ -84,11 +96,7 @@ export function calculateGridRanges(
   const lows = windowCandles.map((c) => c.low);
   const highs = windowCandles.map((c) => c.high);
 
-  function createRange(
-    type: RangeType,
-    pLowPct: number,
-    pHighPct: number
-  ): GridRange {
+  function createRange(type: RangeType, pLowPct: number, pHighPct: number): GridRange {
     const rawLowP = calculatePercentile(lows, pLowPct);
     const rawHighP = calculatePercentile(highs, pHighPct);
 
@@ -139,10 +147,8 @@ export function calculateGridRanges(
 }
 
 /**
- * Optimizes or validates an arithmetic grid configuration for a given range.
- * Finds the highest even grid count between 10 and 100 that satisfies:
- * - Step >= 3 * tickSize
- * - Step % >= 6 * roundTripFeePct
+ * Builds or validates a grid configuration.
+ * Supports geometric (default) and arithmetic spacing across even counts from 4 to 100.
  */
 export function buildGridConfig(
   range: GridRange,
@@ -152,7 +158,9 @@ export function buildGridConfig(
   fees: FeeSettings = DEFAULT_FEE_SETTINGS,
   stopLossAtrMultiplier: number = 1.0,
   leverage: number = 1,
-  hypotheticalCapitalUsd: number = 1000
+  hypotheticalCapitalUsd: number = 1000,
+  spacingType: GridSpacingType = 'geometric',
+  maxExchangeLeverage: number = 20
 ): GridConfig {
   const roundTripFeePct = calculateRoundTripFeePct(fees);
   const minTick = getMinTickSize(currentPrice, szDecimals);
@@ -160,22 +168,23 @@ export function buildGridConfig(
   let chosenCount = 0;
   let validationReason: string | undefined;
 
-  if (requestedGridCount && requestedGridCount >= 10 && requestedGridCount <= 100) {
-    const step = (range.upper - range.lower) / requestedGridCount;
-    const validation = validateGridStep(step, currentPrice, szDecimals, roundTripFeePct);
-    if (validation.isValid) {
+  // Validate user-requested count if specified
+  if (requestedGridCount && requestedGridCount >= 4 && requestedGridCount <= 100) {
+    const rawStepPrice = (range.upper - range.lower) / requestedGridCount;
+    const val = validateGridStep(rawStepPrice, currentPrice, szDecimals, roundTripFeePct);
+    if (val.isValid) {
       chosenCount = requestedGridCount;
     } else {
-      validationReason = validation.reason;
+      validationReason = val.reason;
     }
   }
 
-  // If no requested count or requested was invalid, search for best valid even count
+  // If no requested count or requested was invalid, select the highest valid candidate
   if (chosenCount === 0) {
-    // Search even counts descending from 60 to 10
-    for (let c = 60; c >= 10; c -= 2) {
-      const step = (range.upper - range.lower) / c;
-      const val = validateGridStep(step, currentPrice, szDecimals, roundTripFeePct);
+    for (let i = CANDIDATE_GRID_COUNTS.length - 1; i >= 0; i--) {
+      const c = CANDIDATE_GRID_COUNTS[i];
+      const rawStepPrice = (range.upper - range.lower) / c;
+      const val = validateGridStep(rawStepPrice, currentPrice, szDecimals, roundTripFeePct);
       if (val.isValid) {
         chosenCount = c;
         validationReason = undefined;
@@ -184,21 +193,44 @@ export function buildGridConfig(
     }
   }
 
-  // If still none found, fallback to 10 and mark invalid
-  const finalCount = chosenCount > 0 ? chosenCount : (requestedGridCount || 20);
-  const stepPrice = (range.upper - range.lower) / finalCount;
-  const stepPct = currentPrice > 0 ? (stepPrice / currentPrice) * 100 : 0;
+  // Fallback count if none meets strict constraints
+  const finalCount = chosenCount > 0 ? chosenCount : requestedGridCount || 20;
 
-  // Generate arithmetic levels
-  const levels: number[] = [];
-  for (let i = 0; i <= finalCount; i++) {
-    const rawPx = range.lower + i * stepPrice;
-    levels.push(roundToValidTick(rawPx, szDecimals));
+  // Generate levels based on spacingType
+  const rawLevels: number[] = [];
+  let stepPrice = (range.upper - range.lower) / finalCount;
+  let stepPct = 0;
+
+  if (spacingType === 'geometric') {
+    // Geometric spacing: constant % step r = (upper / lower)^(1 / N)
+    const ratio = Math.pow(range.upper / range.lower, 1 / finalCount);
+    stepPct = (ratio - 1) * 100;
+
+    for (let k = 0; k <= finalCount; k++) {
+      const px = range.lower * Math.pow(ratio, k);
+      rawLevels.push(roundToValidTick(px, szDecimals));
+    }
+  } else {
+    // Arithmetic spacing: constant absolute step
+    stepPct = currentPrice > 0 ? (stepPrice / currentPrice) * 100 : 0;
+
+    for (let k = 0; k <= finalCount; k++) {
+      const px = range.lower + k * stepPrice;
+      rawLevels.push(roundToValidTick(px, szDecimals));
+    }
   }
 
-  const isValid = chosenCount > 0;
+  // Deduplicate levels in case tick rounding merged adjacent levels
+  const levels: number[] = [];
+  for (const lvl of rawLevels) {
+    if (levels.length === 0 || lvl > levels[levels.length - 1] + 1e-9) {
+      levels.push(lvl);
+    }
+  }
+
+  const isValid = chosenCount > 0 && levels.length >= 3;
   if (!isValid && !validationReason) {
-    validationReason = `No valid grid count between 10 and 100 satisfies the 3-tick and 6x fee minimums.`;
+    validationReason = `No valid grid count between 4 and 100 satisfies the 3-tick and 6x fee minimums.`;
   }
 
   // Suggested stop loss below range floor with ATR buffer
@@ -208,36 +240,40 @@ export function buildGridConfig(
     szDecimals
   );
 
-  // Liquidation calculation under fully specified hypothetical assumptions
-  // Assumptions: All grid capital deployed into long inventory at average price (midpoint)
-  // Maintenance margin fraction (MMF) approx 1 / (2 * maxLeverage) or ~2.5% at 20x
+  // Liquidation calculation using official Hyperliquid isolated formula:
+  // MMF = 1 / (2 * maxLeverage)
   let estimatedLiquidationPrice: number | undefined;
   let liquidationWarning: string | undefined;
   const missingLiquidationInputs: string[] = [];
 
   if (leverage > 1) {
-    // Model: Position size = (Capital * Leverage) / MidPrice
-    // Margin = Capital
-    // Liquidation occurs when equity drops below maintenance margin
-    // Approx Liq Price for full long inventory = EntryPrice * (1 - (1 / Leverage) + MMF)
     const midPrice = (range.lower + range.upper) / 2;
-    const maintenanceMarginFraction = 0.5 / leverage; // Conservative 50% of initial margin
-    const rawLiq = midPrice * (1 - (1 / leverage) + maintenanceMarginFraction);
+    const liqResult = calculateIsolatedLiquidationPrice(
+      midPrice,
+      leverage,
+      maxExchangeLeverage,
+      szDecimals
+    );
 
-    if (rawLiq > 0) {
-      estimatedLiquidationPrice = roundToValidTick(rawLiq, szDecimals);
-      // Check if liquidation is within 3% of range floor
+    if (liqResult.liquidationPrice > 0) {
+      estimatedLiquidationPrice = liqResult.liquidationPrice;
+
       if (estimatedLiquidationPrice >= range.lower * 0.97) {
-        liquidationWarning = `Estimated liquidation ($${estimatedLiquidationPrice.toFixed(4)}) is within 3% of the range floor ($${range.lower.toFixed(4)}). High risk of liquidation before stop-loss.`;
+        liquidationWarning = `Estimated liquidation ($${estimatedLiquidationPrice}) is within 3% of the range floor ($${range.lower}). High liquidation risk.`;
+      } else if (suggestedStopLoss <= estimatedLiquidationPrice) {
+        liquidationWarning = `Suggested stop loss ($${suggestedStopLoss}) is below liquidation price ($${estimatedLiquidationPrice}). You will be liquidated before the stop triggers.`;
       }
     }
   } else {
-    missingLiquidationInputs.push('Leverage is 1x (unleveraged spot-equivalent); liquidation not applicable without borrowing');
+    missingLiquidationInputs.push(
+      'Leverage is 1x (unleveraged spot-equivalent); liquidation not applicable without borrowing'
+    );
   }
 
   return {
     range,
     gridCount: finalCount,
+    spacingType,
     stepPrice,
     stepPct,
     levels,
@@ -248,6 +284,7 @@ export function buildGridConfig(
     stopLossAtrBuffer: stopLossBuffer,
     estimatedLiquidationPrice,
     liquidationWarning,
-    missingLiquidationInputs: missingLiquidationInputs.length > 0 ? missingLiquidationInputs : undefined,
+    missingLiquidationInputs:
+      missingLiquidationInputs.length > 0 ? missingLiquidationInputs : undefined,
   };
 }

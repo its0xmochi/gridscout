@@ -22,14 +22,61 @@ export function calculatePercentile(values: number[], percentile: number): numbe
 }
 
 /**
+ * Detects whether a candle is flat / zero-activity (common in traditional markets on xyz when market is closed).
+ */
+export function isFlatCandle(candle: Candle): boolean {
+  if (candle.isFlat) return true;
+  const spread = Math.abs(candle.high - candle.low);
+  const relSpread = candle.open > 0 ? spread / candle.open : 0;
+  return relSpread <= 1e-5 || (candle.volume <= 1e-8 && (candle.numTrades === 0 || candle.numTrades === undefined));
+}
+
+/**
+ * Filters out flat or zero-activity candle stretches so that closed-market pauses do not corrupt
+ * range-boundness, ATR, efficiency ratio, or cycle statistics.
+ */
+export function filterActiveCandles(candles: Candle[]): {
+  activeCandles: Candle[];
+  flatCount: number;
+  flatRatio: number;
+} {
+  if (candles.length === 0) {
+    return { activeCandles: [], flatCount: 0, flatRatio: 0 };
+  }
+
+  const activeCandles: Candle[] = [];
+  let flatCount = 0;
+
+  for (const c of candles) {
+    if (isFlatCandle(c)) {
+      flatCount++;
+    } else {
+      activeCandles.push(c);
+    }
+  }
+
+  // If all candles are flat, preserve at least the original set to avoid divide-by-zero
+  const result = activeCandles.length >= 10 ? activeCandles : candles;
+  const flatRatio = candles.length > 0 ? flatCount / candles.length : 0;
+
+  return {
+    activeCandles: result,
+    flatCount,
+    flatRatio,
+  };
+}
+
+/**
  * Kaufman Efficiency Ratio: |Close_t - Close_{t-n}| / Sum(|Close_i - Close_{i-1}|)
  * Lower values indicate oscillatory / range-bound markets.
  * Higher values (near 1.0) indicate strong directional trends.
+ * Automatically excludes flat / zero-activity candle stretches.
  */
 export function calculateKaufmanER(candles: Candle[], lookbackPeriods: number): number {
-  if (candles.length <= lookbackPeriods) return 1.0;
+  const { activeCandles } = filterActiveCandles(candles);
+  if (activeCandles.length <= lookbackPeriods) return 1.0;
 
-  const relevant = candles.slice(-lookbackPeriods - 1);
+  const relevant = activeCandles.slice(-lookbackPeriods - 1);
   const netChange = Math.abs(relevant[relevant.length - 1].close - relevant[0].close);
 
   let totalPath = 0;
@@ -86,17 +133,19 @@ export function calculateATR(candles: Candle[], period: number = 14): {
 
 /**
  * Average Directional Index (ADX) over 14 periods using Wilder smoothing.
+ * Automatically filters out flat/zero-activity closed-market stretches.
  */
 export function calculateADX(candles: Candle[], period: number = 14): number {
-  if (candles.length <= period * 2) return 25; // Neutral default if insufficient history
+  const { activeCandles } = filterActiveCandles(candles);
+  if (activeCandles.length <= period * 2) return 25; // Neutral default if insufficient history
 
   const trs: number[] = [];
   const plusDMs: number[] = [];
   const minusDMs: number[] = [];
 
-  for (let i = 1; i < candles.length; i++) {
-    const cur = candles[i];
-    const prev = candles[i - 1];
+  for (let i = 1; i < activeCandles.length; i++) {
+    const cur = activeCandles[i];
+    const prev = activeCandles[i - 1];
 
     const upMove = cur.high - prev.high;
     const downMove = prev.low - cur.low;
@@ -145,12 +194,14 @@ export function calculateADX(candles: Candle[], period: number = 14): number {
  * Counts crossings of a trailing 24h rolling median per day.
  * Strictly uses only information available at each historical timestamp (no look-ahead).
  * Avoids duplicate counts caused by a candle touching the median.
+ * Excludes flat closed-market bars from cycle statistics.
  */
 export function calculateRollingMedianCrossingsPerDay(
   candles: Candle[],
   rollingWindowBars: number = 24
 ): { crossingsPerDay: number; totalCrossings: number } {
-  if (candles.length < rollingWindowBars + 2) {
+  const { activeCandles } = filterActiveCandles(candles);
+  if (activeCandles.length < rollingWindowBars + 2) {
     return { crossingsPerDay: 0, totalCrossings: 0 };
   }
 
@@ -158,11 +209,11 @@ export function calculateRollingMedianCrossingsPerDay(
   // State: 1 if strictly above median, -1 if strictly below median, 0 initially
   let lastSide = 0;
 
-  for (let i = rollingWindowBars; i < candles.length; i++) {
+  for (let i = rollingWindowBars; i < activeCandles.length; i++) {
     // Window: preceding rollingWindowBars candles up to candle i
-    const windowCloses = candles.slice(i - rollingWindowBars, i + 1).map((c) => c.close);
+    const windowCloses = activeCandles.slice(i - rollingWindowBars, i + 1).map((c) => c.close);
     const median = calculatePercentile(windowCloses, 50);
-    const currentClose = candles[i].close;
+    const currentClose = activeCandles[i].close;
 
     if (currentClose > median + 1e-9) {
       if (lastSide === -1) {
@@ -178,7 +229,7 @@ export function calculateRollingMedianCrossingsPerDay(
     // If currentClose == median, keep lastSide unchanged (avoids duplicate counting)
   }
 
-  const evaluatedBars = candles.length - rollingWindowBars;
+  const evaluatedBars = activeCandles.length - rollingWindowBars;
   const days = evaluatedBars / 24;
   const crossingsPerDay = days > 0 ? totalCrossings / days : 0;
 

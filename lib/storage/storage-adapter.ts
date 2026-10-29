@@ -23,6 +23,8 @@ export interface StorageAdapter {
   saveActiveJob(job: ScanJob | null): Promise<void>;
   getMarketScanTimestamps(): Promise<Record<string, number>>;
   saveMarketScanTimestamps(timestamps: Record<string, number>): Promise<void>;
+  getForwardTests(): Promise<any[]>;
+  saveForwardTests(records: any[]): Promise<void>;
 }
 
 /**
@@ -121,6 +123,24 @@ export class RestKvStorageAdapter implements StorageAdapter {
       console.error('[RestKvStorageAdapter] Failed to save market timestamps:', err);
     }
   }
+
+  public async getForwardTests(): Promise<any[]> {
+    try {
+      const raw = await this.command('GET', 'gridscout:forward_tests');
+      if (!raw) return [];
+      return typeof raw === 'string' ? JSON.parse(raw) : raw;
+    } catch (err) {
+      return [];
+    }
+  }
+
+  public async saveForwardTests(records: any[]): Promise<void> {
+    try {
+      await this.command('SET', 'gridscout:forward_tests', JSON.stringify(records), 'EX', 30 * 86400);
+    } catch (err) {
+      console.error('[RestKvStorageAdapter] Failed to save forward tests:', err);
+    }
+  }
 }
 
 /**
@@ -216,6 +236,24 @@ export class FileStorageAdapter implements StorageAdapter {
       await fs.promises.writeFile(this.tsFilePath, JSON.stringify(timestamps), 'utf-8');
     } catch (err) {}
   }
+
+  public async getForwardTests(): Promise<any[]> {
+    try {
+      const fPath = path.join(path.dirname(this.filePath), 'forward_tests.json');
+      if (fs.existsSync(fPath)) {
+        const raw = await fs.promises.readFile(fPath, 'utf-8');
+        return JSON.parse(raw);
+      }
+    } catch (err) {}
+    return [];
+  }
+
+  public async saveForwardTests(records: any[]): Promise<void> {
+    try {
+      const fPath = path.join(path.dirname(this.filePath), 'forward_tests.json');
+      await fs.promises.writeFile(fPath, JSON.stringify(records, null, 2), 'utf-8');
+    } catch (err) {}
+  }
 }
 
 /**
@@ -226,6 +264,7 @@ export class MemoryStorageAdapter implements StorageAdapter {
   private latestScan: any | null = null;
   private activeJob: ScanJob | null = null;
   private timestamps: Record<string, number> = {};
+  private forwardTests: any[] = [];
 
   constructor(initialScan?: any) {
     if (initialScan) this.latestScan = initialScan;
@@ -253,6 +292,14 @@ export class MemoryStorageAdapter implements StorageAdapter {
 
   public async saveMarketScanTimestamps(timestamps: Record<string, number>): Promise<void> {
     this.timestamps = { ...timestamps };
+  }
+
+  public async getForwardTests(): Promise<any[]> {
+    return [...this.forwardTests];
+  }
+
+  public async saveForwardTests(records: any[]): Promise<void> {
+    this.forwardTests = [...records];
   }
 }
 

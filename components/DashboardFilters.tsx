@@ -20,6 +20,8 @@ interface DashboardFiltersProps {
   onFeePresetChange: (preset: 'default' | 'vip') => void;
   onlyInRange: boolean;
   onOnlyInRangeChange: (val: boolean) => void;
+  targetMode?: boolean;
+  onTargetModeChange?: (val: boolean) => void;
   onRescan?: () => void;
   isScanning?: boolean;
 }
@@ -40,6 +42,8 @@ export const DashboardFilters: React.FC<DashboardFiltersProps> = ({
   onFeePresetChange,
   onlyInRange,
   onOnlyInRangeChange,
+  targetMode = false,
+  onTargetModeChange,
   onRescan,
   isScanning = false,
 }) => {
@@ -184,17 +188,31 @@ export const DashboardFilters: React.FC<DashboardFiltersProps> = ({
           </div>
         </div>
 
-        {/* In Range Only Toggle */}
-        <div className="flex items-center sm:justify-center">
-          <label className="flex items-center space-x-2 cursor-pointer mt-4 sm:mt-2">
+        {/* In Range & Target Mode Toggles */}
+        <div className="flex flex-col sm:flex-row items-start sm:items-center gap-3 sm:justify-end col-span-1 sm:col-span-2 lg:col-span-1 pt-1">
+          <label className="flex items-center space-x-2 cursor-pointer">
             <input
               type="checkbox"
               checked={onlyInRange}
               onChange={(e) => onOnlyInRangeChange(e.target.checked)}
               className="w-4 h-4 rounded border-dark-700 text-emerald-500 focus:ring-0 focus:ring-offset-0 bg-dark-900"
             />
-            <span className="text-slate-300 font-medium">Only In Range Now</span>
+            <span className="text-slate-300 font-medium">In Range Only</span>
           </label>
+
+          {onTargetModeChange && (
+            <label className="flex items-center space-x-2 cursor-pointer" title="Target mode shows higher-volatility markets with risk warnings">
+              <input
+                type="checkbox"
+                checked={targetMode}
+                onChange={(e) => onTargetModeChange(e.target.checked)}
+                className="w-4 h-4 rounded border-amber-600 text-amber-500 focus:ring-0 focus:ring-offset-0 bg-dark-900"
+              />
+              <span className={`font-semibold ${targetMode ? 'text-amber-400' : 'text-slate-400'}`}>
+                Target Mode
+              </span>
+            </label>
+          )}
         </div>
       </div>
     </div>

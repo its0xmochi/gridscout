@@ -7,9 +7,10 @@ import { RegimeAlertsBanner, RegimeAlert } from '../components/RegimeAlertsBanne
 import { DashboardFilters } from '../components/DashboardFilters';
 import { MarketTable } from '../components/MarketTable';
 import { MetricCard } from '../components/MetricCard';
+import { Tooltip } from '../components/Tooltip';
 import { ScanSnapshot, ScannedMarketData } from '../lib/storage/db';
 import { RangeType } from '../lib/analytics/ranges';
-import { Clock, RefreshCw, AlertCircle } from 'lucide-react';
+import { Clock, RefreshCw, AlertCircle, HelpCircle } from 'lucide-react';
 
 export default function HomePage() {
   const [snapshot, setSnapshot] = useState<ScanSnapshot | null>(null);
@@ -27,9 +28,58 @@ export default function HomePage() {
   const [selectedRangeType, setSelectedRangeType] = useState<RangeType>('normal');
   const [feePreset, setFeePreset] = useState<'default' | 'vip'>('default');
   const [onlyInRange, setOnlyInRange] = useState<boolean>(false);
-  const [activeTab, setActiveTab] = useState<'eligible' | 'pending_scan' | 'excluded' | 'insufficient_data'>('eligible');
+  const [targetMode, setTargetMode] = useState<boolean>(false);
+  const [activeTab, setActiveTab] = useState<
+    'eligible' | 'pending_scan' | 'excluded' | 'insufficient_data'
+  >('eligible');
 
   const pollingRef = useRef<NodeJS.Timeout | null>(null);
+
+  // 1. Initialize filters from URL on mount
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('dex')) setSelectedDex(params.get('dex')!);
+      if (params.get('search')) setSearchQuery(params.get('search')!);
+      if (params.get('minVol')) setMinVolume(Number(params.get('minVol')) || 250000);
+      if (params.get('minScore')) setMinScore(Number(params.get('minScore')) || 0);
+      if (params.get('range')) setSelectedRangeType(params.get('range') as RangeType);
+      if (params.get('fee')) setFeePreset(params.get('fee') as any);
+      if (params.get('onlyInRange')) setOnlyInRange(params.get('onlyInRange') === 'true');
+      if (params.get('targetMode')) setTargetMode(params.get('targetMode') === 'true');
+      if (params.get('tab')) setActiveTab(params.get('tab') as any);
+    }
+  }, []);
+
+  // 2. Synchronize filters to URL search params
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const params = new URLSearchParams();
+      if (selectedDex !== 'all') params.set('dex', selectedDex);
+      if (searchQuery) params.set('search', searchQuery);
+      if (minVolume !== 250000) params.set('minVol', minVolume.toString());
+      if (minScore !== 0) params.set('minScore', minScore.toString());
+      if (selectedRangeType !== 'normal') params.set('range', selectedRangeType);
+      if (feePreset !== 'default') params.set('fee', feePreset);
+      if (onlyInRange) params.set('onlyInRange', 'true');
+      if (targetMode) params.set('targetMode', 'true');
+      if (activeTab !== 'eligible') params.set('tab', activeTab);
+
+      const newSearch = params.toString();
+      const newUrl = newSearch ? `${window.location.pathname}?${newSearch}` : window.location.pathname;
+      window.history.replaceState(null, '', newUrl);
+    }
+  }, [
+    selectedDex,
+    searchQuery,
+    minVolume,
+    minScore,
+    selectedRangeType,
+    feePreset,
+    onlyInRange,
+    targetMode,
+    activeTab,
+  ]);
 
   const fetchScanData = useCallback(async () => {
     try {
@@ -84,7 +134,7 @@ export default function HomePage() {
       if (pollingRef.current) clearInterval(pollingRef.current);
 
       let attempts = 0;
-      const maxAttempts = 35; // ~70 seconds timeout
+      const maxAttempts = 40; // ~80 seconds timeout
 
       pollingRef.current = setInterval(async () => {
         attempts++;
@@ -124,133 +174,141 @@ export default function HomePage() {
               return;
             }
           }
-        } catch (pollErr) {
-          console.warn('Polling check error:', pollErr);
+        } catch (e) {
+          console.warn('Poll error, retrying...', e);
         }
 
         if (attempts >= maxAttempts) {
           if (pollingRef.current) clearInterval(pollingRef.current);
           setRefreshing(false);
           setScanMessage('');
-          fetchScanData();
+          setError('Scan request timed out waiting for serverless completion. Please refresh.');
         }
       }, 2000);
     } catch (err: any) {
-      console.error('Scan trigger error:', err);
-      setError(err?.message || 'Failed to trigger scan');
+      setError(err?.message || 'Failed to trigger scan.');
       setRefreshing(false);
-      setScanMessage('');
     }
   };
 
   useEffect(() => {
     fetchScanData();
-    // Auto-refresh displayed stats every 60 seconds
-    const interval = setInterval(fetchScanData, 60000);
+    const interval = setInterval(() => {
+      if (!refreshing) {
+        fetchScanData();
+      }
+    }, 30000); // Background refresh every 30s
+
     return () => {
       clearInterval(interval);
       if (pollingRef.current) clearInterval(pollingRef.current);
     };
-  }, [fetchScanData]);
+  }, [fetchScanData, refreshing]);
 
-  // Extract DEXes
-  const allDexes = snapshot ? snapshot.dexesCovered : ['core', 'xyz', 'io', 'flx'];
+  // Extract unique DEX list from snapshot
+  const allDexes = React.useMemo(() => {
+    if (!snapshot || !Array.isArray(snapshot.markets)) return [];
+    const set = new Set<string>();
+    snapshot.markets.forEach((m) => set.add(m.market.dex));
+    return Array.from(set).sort();
+  }, [snapshot]);
 
-  // All markets
-  const allMarkets: ScannedMarketData[] = snapshot?.markets || [];
+  // Filter lists based on user selections
+  const filterList = (markets: ScannedMarketData[]) => {
+    return markets.filter((item) => {
+      if (selectedDex !== 'all' && item.market.dex.toLowerCase() !== selectedDex.toLowerCase()) {
+        return false;
+      }
+      if (searchQuery) {
+        const q = searchQuery.toLowerCase();
+        const matchesCoin = item.market.baseAsset.toLowerCase().includes(q);
+        const matchesDex = item.market.dex.toLowerCase().includes(q);
+        const matchesSymbol = item.market.symbol.toLowerCase().includes(q);
+        if (!matchesCoin && !matchesDex && !matchesSymbol) return false;
+      }
+      if (item.market.dayNtlVlm < minVolume) {
+        return false;
+      }
+      if (item.score.combinedScore < minScore) {
+        return false;
+      }
+      if (onlyInRange && item.score.metrics.isPriceOutsideRange) {
+        return false;
+      }
+      // Target mode: if false, exclude markets flagged as high risk / excluded from top
+      if (!targetMode && item.score.isExcludedFromTopOpportunity) {
+        return false;
+      }
+      return true;
+    });
+  };
 
-  // Group markets into tabs
-  const eligibleMarkets = allMarkets.filter((m) => m.status === 'eligible');
-  const pendingMarkets = allMarkets.filter((m) => m.status === 'pending_scan');
-  const excludedMarkets = allMarkets.filter((m) => m.status === 'excluded');
-  const insufficientMarkets = allMarkets.filter((m) => m.status === 'insufficient_data' || m.status === 'error');
+  const rawMarkets = snapshot?.markets || [];
+  const eligibleMarkets = filterList(rawMarkets.filter((m) => m.status === 'eligible'));
+  const pendingMarkets = filterList(rawMarkets.filter((m) => m.status === 'pending_scan'));
+  const excludedMarkets = filterList(rawMarkets.filter((m) => m.status === 'excluded'));
+  const insufficientMarkets = filterList(rawMarkets.filter((m) => m.status === 'insufficient_data'));
 
-  // Filter current tab markets
-  const targetMarkets =
-    activeTab === 'eligible'
-      ? eligibleMarkets
-      : activeTab === 'pending_scan'
-      ? pendingMarkets
-      : activeTab === 'excluded'
-      ? excludedMarkets
-      : insufficientMarkets;
+  let filteredMarkets: ScannedMarketData[] = [];
+  switch (activeTab) {
+    case 'eligible':
+      filteredMarkets = eligibleMarkets;
+      break;
+    case 'pending_scan':
+      filteredMarkets = pendingMarkets;
+      break;
+    case 'excluded':
+      filteredMarkets = excludedMarkets;
+      break;
+    case 'insufficient_data':
+      filteredMarkets = insufficientMarkets;
+      break;
+  }
 
-  const filteredMarkets = targetMarkets.filter((m) => {
-    // DEX filter
-    if (selectedDex !== 'all' && m.market.dex.toLowerCase() !== selectedDex.toLowerCase()) {
-      return false;
-    }
-
-    // Search query
-    if (searchQuery.trim()) {
-      const q = searchQuery.toLowerCase();
-      const matchSymbol = m.market.symbol.toLowerCase().includes(q);
-      const matchBase = m.market.baseAsset.toLowerCase().includes(q);
-      const matchDex = m.market.dex.toLowerCase().includes(q);
-      if (!matchSymbol && !matchBase && !matchDex) return false;
-    }
-
-    // For eligible tab, apply volume, score, and in-range filters
-    if (activeTab === 'eligible') {
-      if (m.market.dayNtlVlm < minVolume) return false;
-      if (m.score.combinedScore < minScore) return false;
-      if (onlyInRange && m.score.metrics.isPriceOutsideRange) return false;
-    }
-
-    return true;
-  });
-
-  // Collect regime alerts for top eligible markets
+  // Derive active regime alerts
   const regimeAlerts: RegimeAlert[] = [];
-  for (const m of eligibleMarkets.slice(0, 15)) {
-    if (m.score.metrics.isPriceOutsideRange) {
-      regimeAlerts.push({
-        id: `range_${m.market.id}`,
-        type: 'range_breach',
-        title: 'Range Breach Warning',
-        message: `Current price ($${m.market.markPx.toFixed(2)}) is outside the suggested range floor/ceiling.`,
-        symbol: m.market.baseAsset,
-        dex: m.market.dex,
-        severity: 'high',
-      });
-    }
-    if (m.score.metrics.hasRecent6hBreakout) {
-      regimeAlerts.push({
-        id: `breakout_${m.market.id}`,
-        type: 'breakout_6h',
-        title: 'Volatility Expansion / Breakout',
-        message: 'Price broke 7-day high or low in the last 6 hours.',
-        symbol: m.market.baseAsset,
-        dex: m.market.dex,
-        severity: 'medium',
-      });
-    }
-    if (m.score.metrics.isExtremeFunding) {
-      regimeAlerts.push({
-        id: `funding_${m.market.id}`,
-        type: 'extreme_funding',
-        title: 'Extreme Funding Rate',
-        message: `Funding is at ${(m.market.fundingApr * 100).toFixed(1)}% APR. High carry cost.`,
-        symbol: m.market.baseAsset,
-        dex: m.market.dex,
-        severity: 'high',
-      });
+  if (snapshot) {
+    for (const m of eligibleMarkets.slice(0, 5)) {
+      if (m.score.metrics.worstRolling24hDrawdownPct < -20) {
+        regimeAlerts.push({
+          id: `breakout_${m.market.id}`,
+          type: 'breakout_6h',
+          title: 'Elevated Volatility & Drawdown',
+          message: `${m.market.baseAsset} suffered a ${Math.abs(m.score.metrics.worstRolling24hDrawdownPct).toFixed(1)}% drop in the last 24h.`,
+          symbol: m.market.baseAsset,
+          dex: m.market.dex,
+          severity: 'medium',
+        });
+      }
+      if (Math.abs(m.market.fundingApr) > 0.4) {
+        regimeAlerts.push({
+          id: `funding_${m.market.id}`,
+          type: 'extreme_funding',
+          title: 'Extreme Funding Divergence',
+          message: `Funding is at ${(m.market.fundingApr * 100).toFixed(1)}% APR (${((m.market.fundingApr - 0.1095) * 100).toFixed(1)} pts vs baseline).`,
+          symbol: m.market.baseAsset,
+          dex: m.market.dex,
+          severity: 'high',
+        });
+      }
     }
   }
 
-  const topOpportunity = eligibleMarkets[0];
+  const isScanningActive = refreshing || status?.isScanning;
+  // Top opportunity: must not be excluded from Top Opportunity
+  const topOpportunity = eligibleMarkets.find((m) => !m.score.isExcludedFromTopOpportunity) || eligibleMarkets[0];
 
   return (
-    <div className="min-h-screen flex flex-col bg-dark-900">
+    <div className="min-h-screen flex flex-col bg-slate-950 text-slate-100">
       <Navbar
         onRefresh={() => handleManualScan()}
-        isRefreshing={refreshing || status?.isScanning}
+        isRefreshing={isScanningActive}
         lastUpdated={snapshot?.timestamp}
       />
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6 w-full space-y-6 flex-1">
         {/* Progress Notification Bar during scanning */}
-        {refreshing && (
+        {isScanningActive && (
           <div className="flex items-center justify-between p-3 rounded-xl bg-sky-950/60 border border-sky-800 text-sky-200 text-xs animate-pulse">
             <div className="flex items-center space-x-2">
               <RefreshCw className="w-4 h-4 animate-spin text-sky-400" />
@@ -258,7 +316,9 @@ export default function HomePage() {
                 {scanMessage || 'Scanning Hyperliquid perpetual universe & HIP-3 DEXes...'}
               </span>
             </div>
-            <span className="text-sky-400 text-[11px]">Serverless job active</span>
+            <span className="text-sky-400 text-[11px] font-mono">
+              {status?.progress ? `Scanned ${status.progress.scanned} / ${status.progress.total}` : 'Job in progress'}
+            </span>
           </div>
         )}
 
@@ -268,7 +328,7 @@ export default function HomePage() {
           totalDiscovered={snapshot?.totalDiscovered}
           eligibleCount={snapshot?.eligibleCount}
           isStale={snapshot?.isStale || status?.isStale}
-          isScanning={status?.isScanning || refreshing}
+          isScanning={isScanningActive}
           errorMessage={snapshot?.errorMessage || error || undefined}
         />
 
@@ -279,11 +339,26 @@ export default function HomePage() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           <MetricCard
             title="TOP OPPORTUNITY"
-            value={topOpportunity ? `${topOpportunity.market.dex.toUpperCase()}:${topOpportunity.market.baseAsset}` : 'N/A'}
-            subtitle={topOpportunity ? `Score: ${topOpportunity.score.combinedScore}/100 • Daily: +${topOpportunity.backtest7d?.netDailyReturnPct.toFixed(2) || '0.00'}%` : snapshot ? 'No eligible markets meet criteria' : 'Waiting for scan...'}
-            badge={topOpportunity ? 'Rank #1' : undefined}
+            value={
+              isScanningActive
+                ? 'Scanning...'
+                : topOpportunity
+                ? `${topOpportunity.market.dex.toUpperCase()}:${topOpportunity.market.baseAsset}`
+                : 'N/A'
+            }
+            subtitle={
+              isScanningActive
+                ? 'Evaluating universe candidates...'
+                : topOpportunity
+                ? `Score: ${topOpportunity.score.combinedScore}/100 • Net: +$${((topOpportunity.backtest7d?.netDailyProfitPerDollar || 0) * 1000).toFixed(2)}/$1k`
+                : snapshot
+                ? 'No markets meet strict safety criteria'
+                : 'Waiting for scan...'
+            }
+            badge={!isScanningActive && topOpportunity ? 'Rank #1' : undefined}
             badgeColor="emerald"
           />
+
           <MetricCard
             title="ELIGIBLE GRID MARKETS"
             value={snapshot ? eligibleMarkets.length : '...'}
@@ -291,16 +366,22 @@ export default function HomePage() {
             badge={`Min $${(minVolume / 1000).toFixed(0)}k Vol`}
             badgeColor="sky"
           />
+
           <MetricCard
             title="DEX COVERAGE"
-            value={allDexes.length}
-            subtitle={allDexes.map((d) => d.toUpperCase()).join(', ')}
+            value={allDexes.length > 0 ? allDexes.length : '11'}
+            subtitle={allDexes.length > 0 ? allDexes.map((d) => d.toUpperCase()).join(', ') : 'Core + HIP-3'}
             badge="Hyperliquid + HIP-3"
             badgeColor="slate"
           />
+
           <MetricCard
             title="UNIVERSE HEALTH"
-            value={snapshot ? `${Math.round((eligibleMarkets.length / Math.max(1, snapshot.totalDiscovered)) * 100)}%` : '...'}
+            value={
+              snapshot
+                ? `${Math.round((eligibleMarkets.length / Math.max(1, snapshot.totalDiscovered)) * 100)}%`
+                : '...'
+            }
             subtitle={`${snapshot?.excludedCount || 0} excluded • ${snapshot?.insufficientDataCount || 0} insufficient data`}
             badge="Data Quality"
             badgeColor="emerald"
@@ -324,12 +405,14 @@ export default function HomePage() {
           onFeePresetChange={setFeePreset}
           onlyInRange={onlyInRange}
           onOnlyInRangeChange={setOnlyInRange}
+          targetMode={targetMode}
+          onTargetModeChange={setTargetMode}
           onRescan={() => handleManualScan(minVolume)}
-          isScanning={refreshing || status?.isScanning}
+          isScanning={isScanningActive}
         />
 
         {/* Tab Navigation */}
-        <div className="flex items-center space-x-2 border-b border-dark-750 pb-2 overflow-x-auto">
+        <div className="flex items-center space-x-2 border-b border-slate-800 pb-2 overflow-x-auto">
           <button
             onClick={() => setActiveTab('eligible')}
             className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors flex items-center space-x-2 whitespace-nowrap ${
@@ -339,7 +422,7 @@ export default function HomePage() {
             }`}
           >
             <span>Eligible Markets</span>
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-dark-750 text-slate-300">
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
               {eligibleMarkets.length}
             </span>
           </button>
@@ -353,7 +436,7 @@ export default function HomePage() {
             }`}
           >
             <span>Queued for Scan</span>
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-dark-750 text-slate-300">
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
               {pendingMarkets.length}
             </span>
           </button>
@@ -367,7 +450,7 @@ export default function HomePage() {
             }`}
           >
             <span>Excluded Markets</span>
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-dark-750 text-slate-300">
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
               {excludedMarkets.length}
             </span>
           </button>
@@ -381,7 +464,7 @@ export default function HomePage() {
             }`}
           >
             <span>Insufficient History</span>
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-dark-750 text-slate-300">
+            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
               {insufficientMarkets.length}
             </span>
           </button>
@@ -389,15 +472,15 @@ export default function HomePage() {
 
         {/* Main Content Area */}
         {loading ? (
-          <div className="text-center py-20 bg-dark-850 rounded-xl border border-dark-700">
-            <div className="w-8 h-8 border-2 border-emerald-400 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+          <div className="text-center py-20 bg-slate-900/60 rounded-xl border border-slate-800">
+            <div className="w-8 h-8 border-2 border-sky-400 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
             <p className="text-slate-300 font-medium">Connecting to persistent storage...</p>
             <p className="text-xs text-slate-500 mt-1">Retrieving latest scan snapshot...</p>
           </div>
         ) : !snapshot ? (
-          /* Empty Storage State: Mandated Priority 1 requirement */
-          <div className="text-center py-20 px-4 bg-dark-850 rounded-xl border border-dark-700">
-            <Clock className="w-12 h-12 text-emerald-400 mx-auto mb-4 animate-pulse opacity-80" />
+          /* Empty Storage State */
+          <div className="text-center py-20 px-4 bg-slate-900/60 rounded-xl border border-slate-800">
+            <Clock className="w-12 h-12 text-sky-400 mx-auto mb-4 animate-pulse opacity-80" />
             <h3 className="text-lg font-bold text-white">Waiting for first successful scan</h3>
             <p className="text-sm text-slate-400 mt-2 max-w-lg mx-auto">
               No scan snapshot was found in persistent storage yet. Click below to start the initial scan across Hyperliquid and all HIP-3 builder DEXes.
@@ -406,14 +489,14 @@ export default function HomePage() {
               <button
                 onClick={() => handleManualScan()}
                 disabled={refreshing}
-                className="inline-flex items-center space-x-2 px-5 py-2.5 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-sm transition-all active:scale-95 disabled:opacity-50"
+                className="inline-flex items-center space-x-2 px-5 py-2.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm transition-all active:scale-95 disabled:opacity-50 shadow-lg shadow-sky-950/50"
               >
                 <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
                 <span>{refreshing ? 'Scanning Hyperliquid Universe...' : 'Trigger First Scan Now'}</span>
               </button>
             </div>
             <p className="text-xs text-slate-500 mt-4">
-              Automatic scans execute every 5 minutes via scheduled Vercel cron.
+              Automatic scans execute regularly via scheduled Vercel cron.
             </p>
           </div>
         ) : (
@@ -421,9 +504,18 @@ export default function HomePage() {
             markets={filteredMarkets}
             selectedRangeType={selectedRangeType}
             tab={activeTab}
+            isLoading={loading}
+            onRetry={() => handleManualScan()}
           />
         )}
       </main>
+
+      {/* Standard Disclaimer Footer */}
+      <footer className="border-t border-slate-800/80 py-6 text-center text-xs text-slate-500 px-4 mt-8">
+        <p className="max-w-2xl mx-auto leading-relaxed">
+          Not financial advice. Simulations are historical and do not predict results. Grid trading can lose money, especially in trends, breakouts, thin liquidity and adverse funding.
+        </p>
+      </footer>
     </div>
   );
 }
