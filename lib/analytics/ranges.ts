@@ -258,8 +258,8 @@ export function buildGridConfig(
     if (liqResult.liquidationPrice > 0) {
       estimatedLiquidationPrice = liqResult.liquidationPrice;
 
-      if (estimatedLiquidationPrice >= range.lower * 0.97) {
-        liquidationWarning = `Estimated liquidation ($${estimatedLiquidationPrice}) is within 3% of the range floor ($${range.lower}). High liquidation risk.`;
+      if (estimatedLiquidationPrice >= range.lower * 0.95) {
+        liquidationWarning = `Estimated liquidation ($${estimatedLiquidationPrice}) is within 5% of the range floor ($${range.lower}). High liquidation risk.`;
       } else if (suggestedStopLoss <= estimatedLiquidationPrice) {
         liquidationWarning = `Suggested stop loss ($${suggestedStopLoss}) is below liquidation price ($${estimatedLiquidationPrice}). You will be liquidated before the stop triggers.`;
       }

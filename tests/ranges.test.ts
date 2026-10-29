@@ -70,16 +70,16 @@ describe('Suggested Grid Ranges & Grid Config', () => {
     expect(config.suggestedStopLoss).toBeGreaterThan(0);
   });
 
-  it('warns when estimated liquidation is within 3% of the range floor under high leverage', () => {
+  it('warns when estimated liquidation is within 5% of the range floor under high leverage', () => {
     const candles = generateSyntheticCandles(168, 100, 10);
     const { normal } = calculateGridRanges(candles, 2);
     // Under 25x leverage, liquidation is close to entry price
     const config = buildGridConfig(normal, 100, 2, 20, DEFAULT_FEE_SETTINGS, 1.0, 25, 1000);
 
     expect(config.estimatedLiquidationPrice).toBeDefined();
-    if (config.estimatedLiquidationPrice! >= normal.lower * 0.97) {
+    if (config.estimatedLiquidationPrice! >= normal.lower * 0.95) {
       expect(config.liquidationWarning).toBeDefined();
-      expect(config.liquidationWarning).toContain('within 3% of the range floor');
+      expect(config.liquidationWarning).toContain('within 5% of the range floor');
     }
   });
 

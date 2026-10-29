@@ -384,6 +384,18 @@ export function runGridBacktest(
     );
   }
 
+  // Stop-out cost accounting:
+  // Evaluates expected loss when price breaches the grid boundary and hits the defensive stop-loss
+  const stopLossLossPct =
+    gridConfig.suggestedStopLoss && midPrice > 0
+      ? Math.max(0, (midPrice - gridConfig.suggestedStopLoss) / midPrice)
+      : 0;
+  const stopOutFrequencyPerDay = totalDays > 0 ? rangeExitCount / totalDays : 0;
+  const rawStopCost =
+    totalPositionSizeUsd * stopLossLossPct * Math.min(rangeExitCount, Math.ceil(totalDays));
+  const stopOutCostUsd = Math.round(rawStopCost * 100) / 100;
+  const netPnLAfterStopOutUsd = Math.round((netPnLUsd - stopOutCostUsd) * 100) / 100;
+
   // Also simulate re-center comparison if not already running in re-center mode
   let recenterResult;
   if (!recenterOnRangeExit && hasExitedRange) {
@@ -426,6 +438,9 @@ export function runGridBacktest(
     intrabarAmbiguityBars,
     fillUncertaintyPct,
     isProfitable: netPnLUsd > 0,
+    stopOutCostUsd,
+    netPnLAfterStopOutUsd,
+    stopOutFrequencyPerDay: Math.round(stopOutFrequencyPerDay * 10) / 10,
     warnings,
     projections,
     recenterResult,

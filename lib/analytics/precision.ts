@@ -152,11 +152,11 @@ export function calculateIsolatedLiquidationPrice(
   const rawLiq = entryPrice * (1 - (1 / userLeverage) + mmf);
   const liquidationPrice = Math.max(0, roundToValidTick(rawLiq, szDecimals));
   const distancePct = entryPrice > 0 ? ((entryPrice - liquidationPrice) / entryPrice) * 100 : 0;
-  const isCloseToLiquidation = distancePct <= 3.0;
+  const isCloseToLiquidation = distancePct <= 5.0;
 
   let warning: string | undefined;
   if (isCloseToLiquidation) {
-    warning = `Liquidation ($${liquidationPrice}) is only ${distancePct.toFixed(1)}% below entry, indicating severe liquidation risk before defensive stop triggers.`;
+    warning = `Liquidation ($${liquidationPrice}) is only ${distancePct.toFixed(1)}% below entry (<= 5% threshold), indicating severe liquidation risk before defensive stop triggers.`;
   }
 
   return {

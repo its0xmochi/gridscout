@@ -131,4 +131,32 @@ describe('Intrabar-Aware Grid Simulator', () => {
     // Funding should reduce net P&L for long positions
     expect(resWithFunding.fundingPnLUsd).toBeLessThan(resNoFunding.fundingPnLUsd);
   });
+
+  it('computes defensive stop-out drag when price breaks out of the grid range', () => {
+    // Candles that break out of the range (range is 90..110, suggested stop loss is ~86)
+    const candles: Candle[] = [];
+    for (let i = 0; i < 96; i++) {
+      const px = 100 - (i / 96) * 20; // drops to 80, breaking below 90
+      candles.push({
+        time: i * 900000,
+        open: px,
+        high: px + 0.2,
+        low: px - 0.2,
+        close: px,
+        volume: 20,
+      });
+    }
+
+    const result = runGridBacktest(candles, gridConfig, {
+      capitalUsd: 1000,
+      leverage: 1,
+      feeSettings: DEFAULT_FEE_SETTINGS,
+    });
+
+    expect(result.rangeExitCount).toBeGreaterThan(0);
+    expect(result.stopOutCostUsd).toBeDefined();
+    expect(result.stopOutCostUsd).toBeGreaterThan(0);
+    expect(result.netPnLAfterStopOutUsd).toBeDefined();
+    expect(result.netPnLAfterStopOutUsd!).toBeLessThan(result.netPnLUsd);
+  });
 });

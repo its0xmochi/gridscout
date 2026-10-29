@@ -2,21 +2,18 @@
 
 import React, { useState } from 'react';
 import { BacktestResult } from '@/lib/backtest/types';
-import { Upload, FileText, CheckCircle2, AlertTriangle, ShieldCheck, DollarSign } from 'lucide-react';
+import { Upload, FileText, CheckCircle2, AlertTriangle, ShieldCheck, DollarSign, ShieldAlert } from 'lucide-react';
 
 interface TradeHistoryValidatorProps {
   currentCoinSymbol: string;
   simulatorResult?: BacktestResult;
 }
 
-interface ParsedTrade {
-  time: number;
-  coin: string;
-  side: 'buy' | 'sell';
+interface LiquidationFill {
+  time: string;
   price: number;
-  size: number;
-  fee: number;
-  realizedPnl: number;
+  sizeUsd: number;
+  lossUsd: number;
 }
 
 interface CoinTradeSummary {
@@ -26,6 +23,13 @@ interface CoinTradeSummary {
   realizedPnlUsd: number;
   totalFeesUsd: number;
   netPnLUsd: number;
+  // Liquidation metrics
+  liquidationCount: number;
+  liquidationLossUsd: number;
+  netPnLWithoutLiquidationsUsd: number;
+  dailyProfitWithLiq: number;
+  dailyProfitWithoutLiq: number;
+  liquidations: LiquidationFill[];
 }
 
 export function TradeHistoryValidator({
@@ -57,13 +61,15 @@ export function TradeHistoryValidator({
         }
 
         const headers = lines[0].toLowerCase().split(',').map((h) => h.trim().replace(/^"|"$/g, ''));
-        
+
         // Find indices
         const coinIdx = headers.findIndex((h) => h.includes('coin') || h.includes('asset') || h.includes('symbol'));
         const pnlIdx = headers.findIndex((h) => h.includes('closedpnl') || h.includes('realizedpnl') || h.includes('pnl'));
         const feeIdx = headers.findIndex((h) => h.includes('fee'));
         const pxIdx = headers.findIndex((h) => h.includes('px') || h.includes('price'));
         const szIdx = headers.findIndex((h) => h.includes('sz') || h.includes('size') || h.includes('amount'));
+        const dirIdx = headers.findIndex((h) => h.includes('dir') || h.includes('side') || h.includes('type') || h.includes('order'));
+        const timeIdx = headers.findIndex((h) => h.includes('time') || h.includes('date'));
 
         if (coinIdx === -1) {
           setError('Could not identify a "coin" or "asset" column in this CSV.');
@@ -71,13 +77,13 @@ export function TradeHistoryValidator({
         }
 
         const summaries: Record<string, CoinTradeSummary> = {};
+        const timestampsByCoin: Record<string, number[]> = {};
 
         for (let i = 1; i < lines.length; i++) {
           const cols = lines[i].split(',').map((c) => c.trim().replace(/^"|"$/g, ''));
           if (cols.length <= coinIdx) continue;
 
           let coin = cols[coinIdx].toUpperCase();
-          // Strip HIP-3 dex prefix if present (e.g. xyz:xyz-BTC -> BTC)
           if (coin.includes(':')) {
             coin = coin.split(':')[1];
           }
@@ -86,6 +92,12 @@ export function TradeHistoryValidator({
           const fee = feeIdx >= 0 ? parseFloat(cols[feeIdx]) || 0 : 0;
           const px = pxIdx >= 0 ? parseFloat(cols[pxIdx]) || 0 : 0;
           const sz = szIdx >= 0 ? parseFloat(cols[szIdx]) || 0 : 0;
+          const dirText = dirIdx >= 0 ? cols[dirIdx] : '';
+          const timeText = timeIdx >= 0 ? cols[timeIdx] : '';
+
+          const isLiquidation =
+            dirText.toLowerCase().includes('market order liquidation') ||
+            dirText.toLowerCase().includes('liquidation');
 
           if (!summaries[coin]) {
             summaries[coin] = {
@@ -95,14 +107,56 @@ export function TradeHistoryValidator({
               realizedPnlUsd: 0,
               totalFeesUsd: 0,
               netPnLUsd: 0,
+              liquidationCount: 0,
+              liquidationLossUsd: 0,
+              netPnLWithoutLiquidationsUsd: 0,
+              dailyProfitWithLiq: 0,
+              dailyProfitWithoutLiq: 0,
+              liquidations: [],
             };
+            timestampsByCoin[coin] = [];
           }
 
-          summaries[coin].tradeCount++;
-          summaries[coin].totalVolumeUsd += px * sz;
-          summaries[coin].realizedPnlUsd += pnl;
-          summaries[coin].totalFeesUsd += fee;
-          summaries[coin].netPnLUsd += pnl - fee;
+          const sum = summaries[coin];
+          sum.tradeCount++;
+          sum.totalVolumeUsd += px * sz;
+          sum.realizedPnlUsd += pnl;
+          sum.totalFeesUsd += fee;
+          sum.netPnLUsd += pnl - fee;
+
+          if (isLiquidation) {
+            sum.liquidationCount++;
+            const loss = Math.abs(pnl);
+            sum.liquidationLossUsd += loss;
+            sum.liquidations.push({
+              time: timeText || `Row ${i}`,
+              price: px,
+              sizeUsd: Math.round(px * sz * 100) / 100,
+              lossUsd: Math.round(loss * 100) / 100,
+            });
+          } else {
+            sum.netPnLWithoutLiquidationsUsd += pnl - fee;
+          }
+
+          if (timeText) {
+            const parsedTime = Date.parse(timeText);
+            if (!isNaN(parsedTime)) {
+              timestampsByCoin[coin].push(parsedTime);
+            }
+          }
+        }
+
+        // Calculate span days and daily profits
+        for (const coin in summaries) {
+          const times = timestampsByCoin[coin];
+          let spanDays = 1;
+          if (times && times.length >= 2) {
+            const minT = Math.min(...times);
+            const maxT = Math.max(...times);
+            spanDays = Math.max(0.5, (maxT - minT) / (86400 * 1000));
+          }
+          summaries[coin].dailyProfitWithLiq = summaries[coin].netPnLUsd / spanDays;
+          summaries[coin].dailyProfitWithoutLiq = summaries[coin].netPnLWithoutLiquidationsUsd / spanDays;
         }
 
         setCoinSummaries(summaries);
@@ -200,7 +254,7 @@ export function TradeHistoryValidator({
             Export your trade history from Hyperliquid (<span className="text-slate-300 font-mono">Trades &gt; Export CSV</span>) and upload it here.
           </p>
           <p className="text-[11px] text-slate-500 mt-1">
-            We compute your actual realized PnL, fees, and fill count and compare them with the simulator model.
+            Detects completed cycles, trading fees, and liquidation events with and without stop-loss execution.
           </p>
         </div>
       )}
@@ -248,13 +302,13 @@ export function TradeHistoryValidator({
                 </div>
 
                 <div className="bg-slate-800/40 border border-slate-700/50 p-3 rounded-lg font-mono">
-                  <div className="text-[11px] text-slate-400 font-sans">Realized PnL</div>
+                  <div className="text-[11px] text-slate-400 font-sans">Realized PnL (Gross)</div>
                   <div className={`text-lg font-bold mt-0.5 ${
                     activeCoinSummary.realizedPnlUsd >= 0 ? 'text-emerald-400' : 'text-rose-400'
                   }`}>
                     {activeCoinSummary.realizedPnlUsd >= 0 ? '+' : ''}${activeCoinSummary.realizedPnlUsd.toFixed(2)}
                   </div>
-                  <div className="text-[10px] text-slate-500 font-sans">Gross profit</div>
+                  <div className="text-[10px] text-slate-500 font-sans">Before fees</div>
                 </div>
 
                 <div className="bg-slate-800/40 border border-slate-700/50 p-3 rounded-lg font-mono">
@@ -274,6 +328,68 @@ export function TradeHistoryValidator({
                   </div>
                   <div className="text-[10px] text-slate-500 font-sans">PnL after fees</div>
                 </div>
+              </div>
+
+              {/* Liquidation Impact Breakdown */}
+              <div className="p-4 bg-slate-950/80 border border-slate-800 rounded-lg mb-4">
+                <div className="flex items-center justify-between mb-2">
+                  <span className="text-xs font-semibold text-slate-200 flex items-center gap-1.5">
+                    <ShieldAlert className="w-4 h-4 text-amber-400" />
+                    <span>Liquidation Impact Analysis (Fills matching "Market Order Liquidation")</span>
+                  </span>
+                  <span className={`text-xs px-2 py-0.5 rounded font-mono font-semibold ${
+                    activeCoinSummary.liquidationCount > 0
+                      ? 'bg-rose-500/20 text-rose-300'
+                      : 'bg-emerald-500/20 text-emerald-300'
+                  }`}>
+                    {activeCoinSummary.liquidationCount} Liquidation Fill{activeCoinSummary.liquidationCount === 1 ? '' : 's'} Detected
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs font-mono mt-3">
+                  <div className="p-3 bg-slate-900 border border-slate-800 rounded">
+                    <span className="text-slate-400 block text-[11px] font-sans">DAILY PROFIT (WITH LIQUIDATIONS)</span>
+                    <span className={`text-base font-bold ${
+                      activeCoinSummary.dailyProfitWithLiq >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                    }`}>
+                      {activeCoinSummary.dailyProfitWithLiq >= 0 ? '+' : ''}${activeCoinSummary.dailyProfitWithLiq.toFixed(2)} / day
+                    </span>
+                    <span className="text-[10px] text-slate-500 block font-sans mt-0.5">
+                      Total Net: ${activeCoinSummary.netPnLUsd.toFixed(2)}
+                    </span>
+                  </div>
+
+                  <div className="p-3 bg-slate-900 border border-slate-800 rounded">
+                    <span className="text-slate-400 block text-[11px] font-sans">DAILY PROFIT (EXCLUDING LIQUIDATIONS)</span>
+                    <span className={`text-base font-bold ${
+                      activeCoinSummary.dailyProfitWithoutLiq >= 0 ? 'text-emerald-400' : 'text-rose-400'
+                    }`}>
+                      {activeCoinSummary.dailyProfitWithoutLiq >= 0 ? '+' : ''}${activeCoinSummary.dailyProfitWithoutLiq.toFixed(2)} / day
+                    </span>
+                    <span className="text-[10px] text-slate-500 block font-sans mt-0.5">
+                      Total Net: ${activeCoinSummary.netPnLWithoutLiquidationsUsd.toFixed(2)} (Difference: -${activeCoinSummary.liquidationLossUsd.toFixed(2)})
+                    </span>
+                  </div>
+                </div>
+
+                {/* Individual Liquidation Fills List */}
+                {activeCoinSummary.liquidations.length > 0 && (
+                  <div className="mt-3 pt-3 border-t border-slate-800">
+                    <span className="text-[11px] font-semibold text-slate-400 block mb-1.5 uppercase">
+                      Detected Liquidation Fills:
+                    </span>
+                    <div className="space-y-1 font-mono text-xs">
+                      {activeCoinSummary.liquidations.map((liq, idx) => (
+                        <div key={idx} className="flex items-center justify-between p-2 rounded bg-rose-950/20 border border-rose-900/30 text-rose-300">
+                          <span>{liq.time}</span>
+                          <span>Price: ${liq.price}</span>
+                          <span>Position Size: ${liq.sizeUsd.toLocaleString()}</span>
+                          <span className="font-bold text-rose-400">Loss: -${liq.lossUsd.toFixed(2)}</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Comparison with Simulator */}

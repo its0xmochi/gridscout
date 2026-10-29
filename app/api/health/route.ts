@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { globalDb } from '@/lib/storage/db';
+import { globalScanner } from '@/lib/storage/scanner';
 
 export const dynamic = 'force-dynamic';
 
@@ -7,7 +8,7 @@ export async function GET() {
   try {
     const startTime = Date.now();
     const snapshot = await globalDb.getLatestScan();
-    const status = await globalDb.getStatus();
+    const status = await globalScanner.getStatus();
     const activeJob = await globalDb.getActiveJob();
     const storageDurationMs = Date.now() - startTime;
 

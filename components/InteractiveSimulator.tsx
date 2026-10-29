@@ -344,9 +344,9 @@ export const InteractiveSimulator: React.FC<InteractiveSimulatorProps> = ({
 
       {/* Safety & Liquidation Warnings */}
       {gridConfig.liquidationWarning && (
-        <div className="p-3 bg-rose-500/10 border border-rose-500/30 rounded-xl text-rose-300 text-xs flex items-center gap-2">
-          <ShieldAlert className="w-4 h-4 flex-shrink-0 text-rose-400" />
-          <span>{gridConfig.liquidationWarning}</span>
+        <div className="p-3.5 bg-rose-950/80 border-2 border-rose-500 rounded-xl text-rose-200 text-xs flex items-center gap-2.5 shadow-xl shadow-rose-950/60 animate-pulse">
+          <ShieldAlert className="w-5 h-5 flex-shrink-0 text-rose-400" />
+          <div className="font-semibold">{gridConfig.liquidationWarning}</div>
         </div>
       )}
 
@@ -513,6 +513,46 @@ export const InteractiveSimulator: React.FC<InteractiveSimulatorProps> = ({
             <span className="text-rose-400 font-mono font-bold">
               -{backtest.maxDrawdownPct.toFixed(1)}% (-$
               {backtest.maxDrawdownUsd.toFixed(2)})
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Defensive Stop-Out Expected Loss Drag */}
+      <div className="p-3.5 bg-dark-900 rounded-xl border border-dark-750 text-xs">
+        <div className="font-bold text-slate-200 mb-1 flex items-center justify-between">
+          <span className="flex items-center gap-1.5">
+            <ShieldAlert className="w-3.5 h-3.5 text-amber-400" />
+            <span>Expected Defensive Stop-Loss Drag</span>
+          </span>
+          <span className="text-[11px] text-slate-400 font-mono">
+            {backtest.stopOutFrequencyPerDay || 0} range breaches/day
+          </span>
+        </div>
+        <p className="text-[11px] text-slate-400 mb-2 leading-relaxed">
+          Evaluates expected loss if the position hits the defensive stop-loss (${gridConfig.suggestedStopLoss}) whenever price exits the suggested range.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-slate-300 font-mono">
+          <div className="p-2.5 rounded bg-dark-850 border border-dark-700">
+            <span className="text-slate-500 block text-[10px] font-sans">NET PROFIT (BEFORE STOP-OUT)</span>
+            <span className={`text-sm font-bold ${backtest.netPnLUsd >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {backtest.netPnLUsd >= 0 ? '+' : ''}${backtest.netPnLUsd.toFixed(2)}
+            </span>
+          </div>
+          <div className="p-2.5 rounded bg-dark-850 border border-dark-700">
+            <span className="text-slate-500 block text-[10px] font-sans">EST. STOP-OUT DRAG</span>
+            <span className="text-sm font-bold text-rose-400">
+              -${(backtest.stopOutCostUsd || 0).toFixed(2)}
+            </span>
+            <span className="text-[10px] text-slate-500 block font-sans mt-0.5">
+              Based on {backtest.rangeExitCount} historical breakout{backtest.rangeExitCount === 1 ? '' : 's'}
+            </span>
+          </div>
+          <div className="p-2.5 rounded bg-dark-850 border border-dark-700">
+            <span className="text-slate-500 block text-[10px] font-sans">NET PROFIT (AFTER STOP-OUT)</span>
+            <span className={`text-sm font-bold ${(backtest.netPnLAfterStopOutUsd ?? backtest.netPnLUsd) >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+              {(backtest.netPnLAfterStopOutUsd ?? backtest.netPnLUsd) >= 0 ? '+' : ''}$
+              {(backtest.netPnLAfterStopOutUsd ?? backtest.netPnLUsd).toFixed(2)}
             </span>
           </div>
         </div>

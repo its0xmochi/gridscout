@@ -52,6 +52,9 @@ export interface BacktestResult {
   intrabarAmbiguityBars: number;
   fillUncertaintyPct: number;
   isProfitable: boolean;
+  stopOutCostUsd?: number;
+  netPnLAfterStopOutUsd?: number;
+  stopOutFrequencyPerDay?: number;
   warnings: string[];
   projections?: ProfitProjections;
   recenterResult?: {
