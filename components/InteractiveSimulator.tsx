@@ -11,6 +11,12 @@ import {
   FeeSettings,
 } from '@/lib/analytics/ranges';
 import { runGridBacktest } from '@/lib/backtest/simulator';
+import {
+  calculatePathBasedProfit,
+  computePricePath,
+  calibrateAdvisor,
+  CalibrationInput,
+} from '@/lib/analytics/grid-advisor';
 import { Tooltip } from './Tooltip';
 import {
   Sliders,
@@ -23,6 +29,7 @@ import {
   Copy,
   Check,
   RefreshCw,
+  Sparkles,
 } from 'lucide-react';
 
 interface InteractiveSimulatorProps {
@@ -52,6 +59,14 @@ export const InteractiveSimulator: React.FC<InteractiveSimulatorProps> = ({
   const [customMakerFeePct, setCustomMakerFeePct] = useState<number>(0.015);
   const [recenterOnExit, setRecenterOnExit] = useState<boolean>(false);
   const [copiedSettings, setCopiedSettings] = useState<boolean>(false);
+
+  // Calibration state
+  const [calibrationInput, setCalibrationInput] = useState<CalibrationInput>({
+    hours: 24,
+    realizedProfitUsd: 0,
+    roundTrips: 0,
+  });
+  const [isCalibrated, setIsCalibrated] = useState<boolean>(false);
 
   // Active range
   const activeRange: GridRange = useMemo(() => {
@@ -116,6 +131,50 @@ export const InteractiveSimulator: React.FC<InteractiveSimulatorProps> = ({
   const roundTripFeePct = gridConfig.roundTripFeePct;
   const feeDragPerCyclePct =
     gridConfig.stepPct > 0 ? (roundTripFeePct / gridConfig.stepPct) * 100 : 0;
+
+  // Compute price path from 1m/5m candles
+  const dailyPath = useMemo(() => {
+    return computePricePath(candles, 3.5, market.markPx);
+  }, [candles, market.markPx]);
+
+  // Conservative (0.3) to Likely (0.7) Path-Based Daily Profit
+  const conservativeDaily = useMemo(() => {
+    return calculatePathBasedProfit({
+      positionUsd: totalPositionSizeUsd,
+      fillEfficiency: 0.3,
+      pathUsd: dailyPath,
+      stepPrice: gridConfig.stepPrice,
+      roundTripCostPrice: market.markPx * (roundTripFeePct / 100),
+      rangeWidthPrice: Math.max(0.001, activeRange.width),
+      currentPrice: market.markPx,
+    });
+  }, [totalPositionSizeUsd, dailyPath, gridConfig.stepPrice, market.markPx, roundTripFeePct, activeRange.width]);
+
+  const likelyDaily = useMemo(() => {
+    return calculatePathBasedProfit({
+      positionUsd: totalPositionSizeUsd,
+      fillEfficiency: 0.7,
+      pathUsd: dailyPath,
+      stepPrice: gridConfig.stepPrice,
+      roundTripCostPrice: market.markPx * (roundTripFeePct / 100),
+      rangeWidthPrice: Math.max(0.001, activeRange.width),
+      currentPrice: market.markPx,
+    });
+  }, [totalPositionSizeUsd, dailyPath, gridConfig.stepPrice, market.markPx, roundTripFeePct, activeRange.width]);
+
+  // Check step size vs 3x (fee + spread)
+  const minRecommendedStepPct = roundTripFeePct * 3.0;
+  const isStepTooSmall = gridConfig.stepPct < minRecommendedStepPct;
+  const optimalGridCount = isStepTooSmall
+    ? Math.max(4, Math.floor(activeRange.width / (market.markPx * (minRecommendedStepPct / 100))))
+    : undefined;
+
+  // Calibration comparison
+  const calibrationResult = useMemo(() => {
+    if (!isCalibrated || calibrationInput.realizedProfitUsd <= 0) return null;
+    const simAvg = (conservativeDaily + likelyDaily) / 2;
+    return calibrateAdvisor(simAvg, calibrationInput);
+  }, [isCalibrated, calibrationInput, conservativeDaily, likelyDaily]);
 
   const handleCopySettings = () => {
     const text = [
@@ -350,6 +409,18 @@ export const InteractiveSimulator: React.FC<InteractiveSimulatorProps> = ({
         </div>
       )}
 
+      {/* Step Size Warning if < 3x (fee + spread) */}
+      {isStepTooSmall && (
+        <div className="p-3 bg-amber-950/60 border border-amber-600 rounded-xl text-amber-200 text-xs flex items-center gap-2.5">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0 text-amber-400" />
+          <div>
+            <span className="font-bold">Step Size Warning: </span>
+            Step ({gridConfig.stepPct.toFixed(3)}%) is smaller than 3x round-trip fees ({minRecommendedStepPct.toFixed(3)}%).
+            {optimalGridCount ? ` Recommended grid count: ${optimalGridCount} lines.` : ''}
+          </div>
+        </div>
+      )}
+
       {/* Order Sizing & Specifications Row */}
       <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-6 gap-3 p-3.5 bg-dark-900 rounded-xl border border-dark-750 text-xs font-mono">
         <div>
@@ -556,6 +627,128 @@ export const InteractiveSimulator: React.FC<InteractiveSimulatorProps> = ({
             </span>
           </div>
         </div>
+      </div>
+
+      {/* Path-Based 1m Replay & Conservative-to-Likely Profit Range */}
+      <div className="p-4 bg-dark-900 rounded-xl border border-dark-750 space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+          <div className="flex items-center space-x-2">
+            <Sparkles className="w-4 h-4 text-emerald-400" />
+            <span className="font-bold text-slate-200 text-xs uppercase tracking-wider">
+              Path-Based Profit Range (1m Resolution)
+            </span>
+          </div>
+          <span className="text-[11px] text-slate-400 font-mono">
+            Daily Path: ${dailyPath.toFixed(1)} price travel
+          </span>
+        </div>
+        <p className="text-[11px] text-slate-400 leading-relaxed">
+          Formula: <code className="text-emerald-400 font-mono text-[10px]">daily profit = position x fill efficiency x path x (step - cost) / (2 x range width)</code>. Conservative assumes 30% fill efficiency; likely assumes 70%.
+        </p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 font-mono">
+          <div className="p-3 rounded-lg bg-dark-850 border border-dark-700 text-center">
+            <span className="text-slate-500 block text-[10px] font-sans">ESTIMATED 24-HOUR PROFIT</span>
+            <span className="text-base font-bold text-emerald-400">
+              +${conservativeDaily.toFixed(2)} – +${likelyDaily.toFixed(2)}
+            </span>
+            <span className="text-[10px] text-slate-500 block font-sans mt-0.5">
+              Conservative (30% fills) to Likely (70% fills)
+            </span>
+          </div>
+          <div className="p-3 rounded-lg bg-dark-850 border border-dark-700 text-center">
+            <span className="text-slate-500 block text-[10px] font-sans">ESTIMATED 3-HOUR WINDOW</span>
+            <span className="text-base font-bold text-sky-400">
+              +${(conservativeDaily / 8).toFixed(2)} – +${(likelyDaily / 8).toFixed(2)}
+            </span>
+            <span className="text-[10px] text-slate-500 block font-sans mt-0.5">
+              Typical 3-hour cycle earnings
+            </span>
+          </div>
+        </div>
+      </div>
+
+      {/* Real-Session Calibration Box */}
+      <div className="p-4 bg-dark-900 rounded-xl border border-dark-750 space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1">
+          <div className="flex items-center space-x-2">
+            <Sliders className="w-3.5 h-3.5 text-sky-400" />
+            <span className="font-bold text-slate-200 text-xs uppercase tracking-wider">
+              Empirical Calibration Box
+            </span>
+          </div>
+          <span className="text-[11px] text-slate-400">
+            Compare past real sessions to simulation and tune estimates
+          </span>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+          <div>
+            <label className="text-[10px] text-slate-400 block mb-1">Session Hours</label>
+            <input
+              type="number"
+              min="1"
+              value={calibrationInput.hours}
+              onChange={(e) =>
+                setCalibrationInput({
+                  ...calibrationInput,
+                  hours: Math.max(1, Number(e.target.value)),
+                })
+              }
+              className="w-full bg-dark-850 border border-dark-700 rounded px-2.5 py-1 text-slate-200 font-mono"
+            />
+          </div>
+          <div>
+            <label className="text-[10px] text-slate-400 block mb-1">Realized Net Profit ($)</label>
+            <input
+              type="number"
+              step="0.1"
+              value={calibrationInput.realizedProfitUsd}
+              onChange={(e) => {
+                setCalibrationInput({
+                  ...calibrationInput,
+                  realizedProfitUsd: Number(e.target.value),
+                });
+                setIsCalibrated(true);
+              }}
+              className="w-full bg-dark-850 border border-dark-700 rounded px-2.5 py-1 text-slate-200 font-mono"
+            />
+          </div>
+          <div>
+            <label className="text-[10px] text-slate-400 block mb-1">Round Trips</label>
+            <input
+              type="number"
+              min="0"
+              value={calibrationInput.roundTrips}
+              onChange={(e) =>
+                setCalibrationInput({
+                  ...calibrationInput,
+                  roundTrips: Number(e.target.value),
+                })
+              }
+              className="w-full bg-dark-850 border border-dark-700 rounded px-2.5 py-1 text-slate-200 font-mono"
+            />
+          </div>
+        </div>
+        {calibrationResult && (
+          <div
+            className={`p-2.5 rounded-lg border text-xs flex items-center justify-between ${
+              calibrationResult.status === 'outperforming'
+                ? 'bg-emerald-950/40 border-emerald-800 text-emerald-200'
+                : calibrationResult.status === 'underperforming'
+                ? 'bg-amber-950/40 border-amber-800 text-amber-200'
+                : 'bg-sky-950/40 border-sky-800 text-sky-200'
+            }`}
+          >
+            <div>
+              <span className="font-bold block">
+                Model Fit: {Math.round(calibrationResult.calibrationRatio * 100)}% of model
+              </span>
+              <span className="text-[11px] opacity-90">{calibrationResult.description}</span>
+            </div>
+            <div className="font-mono font-bold text-right pl-3 whitespace-nowrap">
+              ${calibrationResult.realizedHourlyProfit}/hr vs ${calibrationResult.simulatedHourlyProfit}/hr sim
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Comparison: With vs Without Re-centering */}

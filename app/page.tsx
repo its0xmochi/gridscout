@@ -8,9 +8,10 @@ import { DashboardFilters } from '../components/DashboardFilters';
 import { MarketTable } from '../components/MarketTable';
 import { MetricCard } from '../components/MetricCard';
 import { Tooltip } from '../components/Tooltip';
+import { GridAdvisor } from '../components/GridAdvisor';
 import { ScanSnapshot, ScannedMarketData } from '../lib/storage/db';
 import { RangeType } from '../lib/analytics/ranges';
-import { Clock, RefreshCw, AlertCircle, HelpCircle } from 'lucide-react';
+import { Clock, RefreshCw, AlertCircle, HelpCircle, Sparkles, Sliders } from 'lucide-react';
 
 export default function HomePage() {
   const [snapshot, setSnapshot] = useState<ScanSnapshot | null>(null);
@@ -19,6 +20,9 @@ export default function HomePage() {
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [scanMessage, setScanMessage] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
+
+  // View Mode: Simple Grid Advisor (default) vs Advanced Mode
+  const [viewMode, setViewMode] = useState<'advisor' | 'advanced'>('advisor');
 
   // Filters state
   const [selectedDex, setSelectedDex] = useState<string>('all');
@@ -332,181 +336,232 @@ export default function HomePage() {
           errorMessage={snapshot?.errorMessage || error || undefined}
         />
 
-        {/* Regime Alerts Banner */}
-        <RegimeAlertsBanner alerts={regimeAlerts} />
+        {/* View Mode Switcher: Simple Grid Advisor (Default) vs Advanced View */}
+        <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-900/90 border border-slate-800 p-3 rounded-2xl">
+          <div className="flex items-center space-x-2">
+            <button
+              type="button"
+              onClick={() => setViewMode('advisor')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center space-x-2 transition-all ${
+                viewMode === 'advisor'
+                  ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Sparkles className="w-3.5 h-3.5" />
+              <span>Grid Advisor (Simple 3-Step)</span>
+            </button>
 
-        {/* Key Metrics Row */}
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          <MetricCard
-            title="TOP OPPORTUNITY"
-            value={
-              isScanningActive
-                ? 'Scanning...'
-                : topOpportunity
-                ? `${topOpportunity.market.dex.toUpperCase()}:${topOpportunity.market.baseAsset}`
-                : 'N/A'
-            }
-            subtitle={
-              isScanningActive
-                ? 'Evaluating universe candidates...'
-                : topOpportunity
-                ? `Score: ${topOpportunity.score.combinedScore}/100 • Net: +$${((topOpportunity.backtest7d?.netDailyProfitPerDollar || 0) * 1000).toFixed(2)}/$1k`
-                : snapshot
-                ? 'No markets meet strict safety criteria'
-                : 'Waiting for scan...'
-            }
-            badge={!isScanningActive && topOpportunity ? 'Rank #1' : undefined}
-            badgeColor="emerald"
-          />
-
-          <MetricCard
-            title="ELIGIBLE GRID MARKETS"
-            value={snapshot ? eligibleMarkets.length : '...'}
-            subtitle={`Filtered with >=$${(minVolume / 1000).toFixed(0)}k vol from ${snapshot?.totalDiscovered || 0} perps`}
-            badge={`Min $${(minVolume / 1000).toFixed(0)}k Vol`}
-            badgeColor="sky"
-          />
-
-          <MetricCard
-            title="DEX COVERAGE"
-            value={allDexes.length > 0 ? allDexes.length : '11'}
-            subtitle={allDexes.length > 0 ? allDexes.map((d) => d.toUpperCase()).join(', ') : 'Core + HIP-3'}
-            badge="Hyperliquid + HIP-3"
-            badgeColor="slate"
-          />
-
-          <MetricCard
-            title="UNIVERSE HEALTH"
-            value={
-              snapshot
-                ? `${Math.round((eligibleMarkets.length / Math.max(1, snapshot.totalDiscovered)) * 100)}%`
-                : '...'
-            }
-            subtitle={`${snapshot?.excludedCount || 0} excluded • ${snapshot?.insufficientDataCount || 0} insufficient data`}
-            badge="Data Quality"
-            badgeColor="emerald"
-          />
-        </div>
-
-        {/* Filters */}
-        <DashboardFilters
-          dexes={allDexes}
-          selectedDex={selectedDex}
-          onSelectDex={setSelectedDex}
-          searchQuery={searchQuery}
-          onSearchChange={setSearchQuery}
-          minVolume={minVolume}
-          onMinVolumeChange={setMinVolume}
-          minScore={minScore}
-          onMinScoreChange={setMinScore}
-          selectedRangeType={selectedRangeType}
-          onSelectRangeType={setSelectedRangeType}
-          feePreset={feePreset}
-          onFeePresetChange={setFeePreset}
-          onlyInRange={onlyInRange}
-          onOnlyInRangeChange={setOnlyInRange}
-          targetMode={targetMode}
-          onTargetModeChange={setTargetMode}
-          onRescan={() => handleManualScan(minVolume)}
-          isScanning={isScanningActive}
-        />
-
-        {/* Tab Navigation */}
-        <div className="flex items-center space-x-2 border-b border-slate-800 pb-2 overflow-x-auto">
-          <button
-            onClick={() => setActiveTab('eligible')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors flex items-center space-x-2 whitespace-nowrap ${
-              activeTab === 'eligible'
-                ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <span>Eligible Markets</span>
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
-              {eligibleMarkets.length}
-            </span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('pending_scan')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors flex items-center space-x-2 whitespace-nowrap ${
-              activeTab === 'pending_scan'
-                ? 'bg-sky-500/10 text-sky-400 border border-sky-500/30'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <span>Queued for Scan</span>
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
-              {pendingMarkets.length}
-            </span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('excluded')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors flex items-center space-x-2 whitespace-nowrap ${
-              activeTab === 'excluded'
-                ? 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <span>Excluded Markets</span>
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
-              {excludedMarkets.length}
-            </span>
-          </button>
-
-          <button
-            onClick={() => setActiveTab('insufficient_data')}
-            className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors flex items-center space-x-2 whitespace-nowrap ${
-              activeTab === 'insufficient_data'
-                ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
-                : 'text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <span>Insufficient History</span>
-            <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
-              {insufficientMarkets.length}
-            </span>
-          </button>
-        </div>
-
-        {/* Main Content Area */}
-        {loading ? (
-          <div className="text-center py-20 bg-slate-900/60 rounded-xl border border-slate-800">
-            <div className="w-8 h-8 border-2 border-sky-400 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
-            <p className="text-slate-300 font-medium">Connecting to persistent storage...</p>
-            <p className="text-xs text-slate-500 mt-1">Retrieving latest scan snapshot...</p>
+            <button
+              type="button"
+              onClick={() => setViewMode('advanced')}
+              className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center space-x-2 transition-all ${
+                viewMode === 'advanced'
+                  ? 'bg-slate-800 text-sky-400 border border-slate-700 shadow-md'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              <span>Advanced Scanner View</span>
+            </button>
           </div>
-        ) : !snapshot ? (
-          /* Empty Storage State */
-          <div className="text-center py-20 px-4 bg-slate-900/60 rounded-xl border border-slate-800">
-            <Clock className="w-12 h-12 text-sky-400 mx-auto mb-4 animate-pulse opacity-80" />
-            <h3 className="text-lg font-bold text-white">Waiting for first successful scan</h3>
-            <p className="text-sm text-slate-400 mt-2 max-w-lg mx-auto">
-              No scan snapshot was found in persistent storage yet. Click below to start the initial scan across Hyperliquid and all HIP-3 builder DEXes.
-            </p>
-            <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-3">
+
+          <div className="text-[11px] text-slate-400">
+            {viewMode === 'advisor'
+              ? '✨ Showing simplified 3-step recommendations & top 5 cards'
+              : '🔧 Showing full universe rankings, technical scores & filters'}
+          </div>
+        </div>
+
+        {viewMode === 'advisor' ? (
+          /* Simple Grid Advisor View */
+          <GridAdvisor
+            markets={rawMarkets}
+            onSelectMarketForDetail={(id) => {
+              window.location.href = `/market/${encodeURIComponent(id)}`;
+            }}
+            isScanning={isScanningActive}
+          />
+        ) : (
+          /* Advanced Scanner View */
+          <>
+            {/* Regime Alerts Banner */}
+            <RegimeAlertsBanner alerts={regimeAlerts} />
+
+            {/* Key Metrics Row */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <MetricCard
+                title="TOP OPPORTUNITY"
+                value={
+                  isScanningActive
+                    ? 'Scanning...'
+                    : topOpportunity
+                    ? `${topOpportunity.market.dex.toUpperCase()}:${topOpportunity.market.baseAsset}`
+                    : 'N/A'
+                }
+                subtitle={
+                  isScanningActive
+                    ? 'Evaluating universe candidates...'
+                    : topOpportunity
+                    ? `Score: ${topOpportunity.score.combinedScore}/100 • Net: +$${((topOpportunity.backtest7d?.netDailyProfitPerDollar || 0) * 1000).toFixed(2)}/$1k`
+                    : snapshot
+                    ? 'No markets meet strict safety criteria'
+                    : 'Waiting for scan...'
+                }
+                badge={!isScanningActive && topOpportunity ? 'Rank #1' : undefined}
+                badgeColor="emerald"
+              />
+
+              <MetricCard
+                title="ELIGIBLE GRID MARKETS"
+                value={snapshot ? eligibleMarkets.length : '...'}
+                subtitle={`Filtered with >=$${(minVolume / 1000).toFixed(0)}k vol from ${snapshot?.totalDiscovered || 0} perps`}
+                badge={`Min $${(minVolume / 1000).toFixed(0)}k Vol`}
+                badgeColor="sky"
+              />
+
+              <MetricCard
+                title="DEX COVERAGE"
+                value={allDexes.length > 0 ? allDexes.length : '11'}
+                subtitle={allDexes.length > 0 ? allDexes.map((d) => d.toUpperCase()).join(', ') : 'Core + HIP-3'}
+                badge="Hyperliquid + HIP-3"
+                badgeColor="slate"
+              />
+
+              <MetricCard
+                title="UNIVERSE HEALTH"
+                value={
+                  snapshot
+                    ? `${Math.round((eligibleMarkets.length / Math.max(1, snapshot.totalDiscovered)) * 100)}%`
+                    : '...'
+                }
+                subtitle={`${snapshot?.excludedCount || 0} excluded • ${snapshot?.insufficientDataCount || 0} insufficient data`}
+                badge="Data Quality"
+                badgeColor="emerald"
+              />
+            </div>
+
+            {/* Filters */}
+            <DashboardFilters
+              dexes={allDexes}
+              selectedDex={selectedDex}
+              onSelectDex={setSelectedDex}
+              searchQuery={searchQuery}
+              onSearchChange={setSearchQuery}
+              minVolume={minVolume}
+              onMinVolumeChange={setMinVolume}
+              minScore={minScore}
+              onMinScoreChange={setMinScore}
+              selectedRangeType={selectedRangeType}
+              onSelectRangeType={setSelectedRangeType}
+              feePreset={feePreset}
+              onFeePresetChange={setFeePreset}
+              onlyInRange={onlyInRange}
+              onOnlyInRangeChange={setOnlyInRange}
+              targetMode={targetMode}
+              onTargetModeChange={setTargetMode}
+              onRescan={() => handleManualScan(minVolume)}
+              isScanning={isScanningActive}
+            />
+
+            {/* Tab Navigation */}
+            <div className="flex items-center space-x-2 border-b border-slate-800 pb-2 overflow-x-auto">
               <button
-                onClick={() => handleManualScan()}
-                disabled={refreshing}
-                className="inline-flex items-center space-x-2 px-5 py-2.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm transition-all active:scale-95 disabled:opacity-50 shadow-lg shadow-sky-950/50"
+                onClick={() => setActiveTab('eligible')}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors flex items-center space-x-2 whitespace-nowrap ${
+                  activeTab === 'eligible'
+                    ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/30'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
               >
-                <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
-                <span>{refreshing ? 'Scanning Hyperliquid Universe...' : 'Trigger First Scan Now'}</span>
+                <span>Eligible Markets</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
+                  {eligibleMarkets.length}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('pending_scan')}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors flex items-center space-x-2 whitespace-nowrap ${
+                  activeTab === 'pending_scan'
+                    ? 'bg-sky-500/10 text-sky-400 border border-sky-500/30'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <span>Queued for Scan</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
+                  {pendingMarkets.length}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('excluded')}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors flex items-center space-x-2 whitespace-nowrap ${
+                  activeTab === 'excluded'
+                    ? 'bg-rose-500/10 text-rose-400 border border-rose-500/30'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <span>Excluded Markets</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
+                  {excludedMarkets.length}
+                </span>
+              </button>
+
+              <button
+                onClick={() => setActiveTab('insufficient_data')}
+                className={`px-4 py-2 rounded-lg text-xs font-bold transition-colors flex items-center space-x-2 whitespace-nowrap ${
+                  activeTab === 'insufficient_data'
+                    ? 'bg-amber-500/10 text-amber-400 border border-amber-500/30'
+                    : 'text-slate-400 hover:text-slate-200'
+                }`}
+              >
+                <span>Insufficient History</span>
+                <span className="px-1.5 py-0.2 rounded-full text-[10px] bg-slate-800 text-slate-300">
+                  {insufficientMarkets.length}
+                </span>
               </button>
             </div>
-            <p className="text-xs text-slate-500 mt-4">
-              Automatic scans execute regularly via scheduled Vercel cron.
-            </p>
-          </div>
-        ) : (
-          <MarketTable
-            markets={filteredMarkets}
-            selectedRangeType={selectedRangeType}
-            tab={activeTab}
-            isLoading={loading}
-            onRetry={() => handleManualScan()}
-          />
+
+            {/* Main Content Area */}
+            {loading ? (
+              <div className="text-center py-20 bg-slate-900/60 rounded-xl border border-slate-800">
+                <div className="w-8 h-8 border-2 border-sky-400 border-t-transparent rounded-full animate-spin mx-auto mb-3" />
+                <p className="text-slate-300 font-medium">Connecting to persistent storage...</p>
+                <p className="text-xs text-slate-500 mt-1">Retrieving latest scan snapshot...</p>
+              </div>
+            ) : !snapshot ? (
+              /* Empty Storage State */
+              <div className="text-center py-20 px-4 bg-slate-900/60 rounded-xl border border-slate-800">
+                <Clock className="w-12 h-12 text-sky-400 mx-auto mb-4 animate-pulse opacity-80" />
+                <h3 className="text-lg font-bold text-white">Waiting for first successful scan</h3>
+                <p className="text-sm text-slate-400 mt-2 max-w-lg mx-auto">
+                  No scan snapshot was found in persistent storage yet. Click below to start the initial scan across Hyperliquid and all HIP-3 builder DEXes.
+                </p>
+                <div className="mt-6 flex flex-col sm:flex-row items-center justify-center gap-3">
+                  <button
+                    onClick={() => handleManualScan()}
+                    disabled={refreshing}
+                    className="inline-flex items-center space-x-2 px-5 py-2.5 rounded-lg bg-sky-600 hover:bg-sky-500 text-white font-semibold text-sm transition-all active:scale-95 disabled:opacity-50 shadow-lg shadow-sky-950/50"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
+                    <span>{refreshing ? 'Scanning Hyperliquid Universe...' : 'Trigger First Scan Now'}</span>
+                  </button>
+                </div>
+                <p className="text-xs text-slate-500 mt-4">
+                  Automatic scans execute regularly via scheduled Vercel cron.
+                </p>
+              </div>
+            ) : (
+              <MarketTable
+                markets={filteredMarkets}
+                selectedRangeType={selectedRangeType}
+                tab={activeTab}
+                isLoading={loading}
+                onRetry={() => handleManualScan()}
+              />
+            )}
+          </>
         )}
       </main>
 

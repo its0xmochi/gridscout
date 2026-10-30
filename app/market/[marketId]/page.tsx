@@ -53,6 +53,7 @@ export default function MarketDetailPage({
   const [activeConfig, setActiveConfig] = useState<GridConfig | null>(null);
   const [isAlertModalOpen, setIsAlertModalOpen] = useState<boolean>(false);
   const [activeTab, setActiveTab] = useState<'simulator' | 'optimiser' | 'target' | 'validator'>('simulator');
+  const [isAdvancedMode, setIsAdvancedMode] = useState<boolean>(false);
 
   useEffect(() => {
     async function loadMarket() {
@@ -272,63 +273,86 @@ export default function MarketDetailPage({
           currentPrice={market.markPx}
         />
 
-        {/* Navigation Tabs for Advanced Grid Analytics */}
-        <div className="flex border-b border-slate-800 space-x-1 sm:space-x-4 text-xs sm:text-sm font-semibold">
+        {/* Advanced Toggle */}
+        <div className="flex items-center justify-between bg-slate-900 border border-slate-800 p-3 rounded-xl">
+          <div className="text-xs font-semibold text-slate-300">
+            {isAdvancedMode
+              ? '🔧 Showing all advanced grid modeling tabs (Optimiser, Solver, Validator)'
+              : '✨ Simple Grid Simulator (Advanced modeling tabs hidden)'}
+          </div>
           <button
             type="button"
-            onClick={() => setActiveTab('simulator')}
-            className={`pb-3 px-3 border-b-2 flex items-center gap-2 transition-colors ${
-              activeTab === 'simulator'
-                ? 'border-sky-500 text-sky-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
+            onClick={() => setIsAdvancedMode(!isAdvancedMode)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+              isAdvancedMode
+                ? 'bg-sky-500/20 text-sky-400 border border-sky-500/40'
+                : 'bg-slate-800 text-slate-300 hover:text-white'
             }`}
           >
-            <Sliders className="w-4 h-4" />
-            <span>Interactive Simulator</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('optimiser')}
-            className={`pb-3 px-3 border-b-2 flex items-center gap-2 transition-colors ${
-              activeTab === 'optimiser'
-                ? 'border-sky-500 text-sky-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Zap className="w-4 h-4 text-amber-400" />
-            <span>Best Grid Count Optimiser</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('target')}
-            className={`pb-3 px-3 border-b-2 flex items-center gap-2 transition-colors ${
-              activeTab === 'target'
-                ? 'border-sky-500 text-sky-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <Target className="w-4 h-4 text-emerald-400" />
-            <span>Target Profit Solver</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('validator')}
-            className={`pb-3 px-3 border-b-2 flex items-center gap-2 transition-colors ${
-              activeTab === 'validator'
-                ? 'border-sky-500 text-sky-400'
-                : 'border-transparent text-slate-400 hover:text-slate-200'
-            }`}
-          >
-            <ShieldCheck className="w-4 h-4 text-indigo-400" />
-            <span>Trade CSV Reality Check</span>
+            <Sliders className="w-3.5 h-3.5" />
+            <span>{isAdvancedMode ? 'Hide Advanced Tabs' : 'Show Advanced Tabs'}</span>
           </button>
         </div>
 
+        {/* Navigation Tabs for Advanced Grid Analytics */}
+        {isAdvancedMode && (
+          <div className="flex border-b border-slate-800 space-x-1 sm:space-x-4 text-xs sm:text-sm font-semibold overflow-x-auto pb-1">
+            <button
+              type="button"
+              onClick={() => setActiveTab('simulator')}
+              className={`pb-3 px-3 border-b-2 flex items-center gap-2 transition-colors whitespace-nowrap ${
+                activeTab === 'simulator'
+                  ? 'border-sky-500 text-sky-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Sliders className="w-4 h-4" />
+              <span>Interactive Simulator</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('optimiser')}
+              className={`pb-3 px-3 border-b-2 flex items-center gap-2 transition-colors whitespace-nowrap ${
+                activeTab === 'optimiser'
+                  ? 'border-sky-500 text-sky-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Zap className="w-4 h-4 text-amber-400" />
+              <span>Best Grid Count Optimiser</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('target')}
+              className={`pb-3 px-3 border-b-2 flex items-center gap-2 transition-colors whitespace-nowrap ${
+                activeTab === 'target'
+                  ? 'border-sky-500 text-sky-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <Target className="w-4 h-4 text-emerald-400" />
+              <span>Target Profit Solver</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setActiveTab('validator')}
+              className={`pb-3 px-3 border-b-2 flex items-center gap-2 transition-colors whitespace-nowrap ${
+                activeTab === 'validator'
+                  ? 'border-sky-500 text-sky-400'
+                  : 'border-transparent text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              <ShieldCheck className="w-4 h-4 text-indigo-400" />
+              <span>Trade CSV Reality Check</span>
+            </button>
+          </div>
+        )}
+
         {/* Tab Content Display */}
-        {activeTab === 'simulator' && (
+        {(!isAdvancedMode || activeTab === 'simulator') && (
           <InteractiveSimulator
             market={market}
             candles={simulationCandles}
@@ -338,7 +362,7 @@ export default function MarketDetailPage({
           />
         )}
 
-        {activeTab === 'optimiser' && optimiserResult && (
+        {isAdvancedMode && activeTab === 'optimiser' && optimiserResult && (
           <GridOptimiserChart
             optimiserResult={optimiserResult}
             selectedGridCount={currentConfig.gridCount}
@@ -360,7 +384,7 @@ export default function MarketDetailPage({
           />
         )}
 
-        {activeTab === 'target' && (
+        {isAdvancedMode && activeTab === 'target' && (
           <TargetSolverPanel
             currentPrice={market.markPx}
             rangeFloor={currentConfig.range.lower}
@@ -371,7 +395,7 @@ export default function MarketDetailPage({
           />
         )}
 
-        {activeTab === 'validator' && (
+        {isAdvancedMode && activeTab === 'validator' && (
           <TradeHistoryValidator
             currentCoinSymbol={market.baseAsset}
             simulatorResult={backtest7d || backtest3d}
