@@ -307,7 +307,7 @@ export function analyzeFundingFarm(
   settings: UserFarmSettings
 ): FarmAnalysis {
   const capital = Math.max(10, settings.capitalUsd);
-  const leverage = Math.max(1, Math.min(10, settings.leverage));
+  const leverage = Math.max(1, Math.min(20, settings.leverage));
   const holdingDays = Math.max(1, settings.plannedHoldingDays);
 
   // Capital is split equally across both venues: $500 on Long, $500 on Short

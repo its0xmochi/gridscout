@@ -85,7 +85,9 @@ export const FundingFarm: React.FC = () => {
 
   // Step 2: User Settings
   const [capitalUsd, setCapitalUsd] = useState<number>(1000);
+  const [capitalStr, setCapitalStr] = useState<string>('1000');
   const [leverage, setLeverage] = useState<number>(2);
+  const [leverageStr, setLeverageStr] = useState<string>('2');
   const [marginMode, setMarginMode] = useState<'isolated' | 'cross'>('isolated');
   const [feeTier, setFeeTier] = useState<'standard_taker' | 'maker_taker_blend' | 'vip'>('maker_taker_blend');
   const [holdingDays, setHoldingDays] = useState<number>(7);
@@ -708,20 +710,43 @@ Verified by GridScout · strictly read-only`;
                   <span className="font-mono text-sm font-bold text-white">${capitalUsd.toLocaleString()}</span>
                 </div>
                 <div className="flex items-center space-x-2">
-                  <input
-                    type="number"
-                    min="50"
-                    step="100"
-                    value={capitalUsd}
-                    onChange={(e) => setCapitalUsd(Math.max(50, Number(e.target.value)))}
-                    className="w-full bg-dark-900 border border-dark-700 rounded-xl px-3 py-2 text-sm text-white font-mono focus:border-emerald-500 outline-none"
-                  />
+                  <div className="relative flex-1">
+                    <span className="absolute left-3 top-2 text-slate-400 text-sm font-mono">$</span>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={capitalStr}
+                      onChange={(e) => {
+                        const val = e.target.value.replace(/[^0-9]/g, '');
+                        setCapitalStr(val);
+                        const num = parseInt(val, 10);
+                        if (!isNaN(num) && num > 0) {
+                          setCapitalUsd(num);
+                        }
+                      }}
+                      onBlur={() => {
+                        const num = parseInt(capitalStr, 10);
+                        if (isNaN(num) || num < 10) {
+                          setCapitalStr('300');
+                          setCapitalUsd(300);
+                        } else {
+                          setCapitalStr(num.toString());
+                          setCapitalUsd(num);
+                        }
+                      }}
+                      placeholder="e.g. 300"
+                      className="w-full bg-dark-900 border border-dark-700 rounded-xl pl-7 pr-3 py-2 text-sm text-white font-mono focus:border-emerald-500 outline-none"
+                    />
+                  </div>
                   <div className="flex space-x-1 shrink-0">
                     {[300, 500, 1000, 5000].map((amt) => (
                       <button
                         key={amt}
                         type="button"
-                        onClick={() => setCapitalUsd(amt)}
+                        onClick={() => {
+                          setCapitalUsd(amt);
+                          setCapitalStr(amt.toString());
+                        }}
                         className={`px-2 py-1 rounded-lg text-[11px] font-mono font-semibold transition-colors ${
                           capitalUsd === amt
                             ? 'bg-emerald-600 text-white'
@@ -738,35 +763,110 @@ Verified by GridScout · strictly read-only`;
                 </p>
               </div>
 
-              {/* Leverage Slider */}
+              {/* Leverage (Expanded up to 10x / 20x) */}
               <div>
                 <div className="flex items-center justify-between mb-1.5">
                   <label className="text-xs font-medium text-slate-300 flex items-center gap-1">
                     Leverage ({leverage}x)
-                    <Tooltip content="Tweet Rule: Do NOT use high leverage. Funding rates are volatile. Keep leverage at 1x-2x (max 3x) to prevent liquidation on sharp price swings.">
+                    <Tooltip content="Tweet Rule: High leverage increases liquidation hazard! At 10x, a ~9.5% price swing liquidates your hedge. Keep at 1x-2x (max 3x) for safety.">
                       <HelpCircle className="w-3.5 h-3.5 text-slate-500" />
                     </Tooltip>
                   </label>
-                  <span className={`text-xs font-bold px-2 py-0.5 rounded ${
-                    leverage <= 2 ? 'bg-emerald-950 text-emerald-400 border border-emerald-800' : 'bg-amber-950 text-amber-400 border border-amber-800'
+                  <span className={`text-xs font-bold px-2 py-0.5 rounded font-mono ${
+                    leverage <= 2
+                      ? 'bg-emerald-950 text-emerald-400 border border-emerald-800'
+                      : leverage <= 3
+                      ? 'bg-emerald-950/70 text-emerald-300 border border-emerald-700'
+                      : leverage <= 5
+                      ? 'bg-amber-950 text-amber-400 border border-amber-800'
+                      : 'bg-red-950 text-red-400 border border-red-800'
                   }`}>
-                    {leverage === 1 ? '1x Safe (No Liq)' : leverage === 2 ? '2x Recommended' : '3x Max Safe'}
+                    {leverage === 1
+                      ? '1x Safe (No Liq)'
+                      : leverage === 2
+                      ? '2x Recommended'
+                      : leverage === 3
+                      ? '3x Max Safe'
+                      : leverage <= 5
+                      ? `${leverage}x Aggressive`
+                      : `${leverage}x High Liquidation Risk`}
                   </span>
                 </div>
-                <input
-                  type="range"
-                  min="1"
-                  max="5"
-                  step="1"
-                  value={leverage}
-                  onChange={(e) => setLeverage(Number(e.target.value))}
-                  className="w-full accent-emerald-500 h-1.5 bg-dark-700 rounded-lg cursor-pointer"
-                />
-                <div className="flex justify-between text-[10px] text-slate-500 mt-1 font-mono">
-                  <span>1x (Survives 95% swing)</span>
-                  <span>2x (Survives 47% swing)</span>
-                  <span>3x</span>
-                  <span>5x (High Risk)</span>
+
+                <div className="flex items-center space-x-3 mb-2">
+                  <input
+                    type="range"
+                    min="1"
+                    max="10"
+                    step="1"
+                    value={Math.min(10, leverage)}
+                    onChange={(e) => {
+                      const lev = Number(e.target.value);
+                      setLeverage(lev);
+                      setLeverageStr(lev.toString());
+                    }}
+                    className="flex-1 accent-emerald-500 h-1.5 bg-dark-700 rounded-lg cursor-pointer"
+                  />
+                  <div className="w-16 shrink-0 relative">
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={leverageStr}
+                      onChange={(e) => {
+                        const val = e.target.value.replace(/[^0-9]/g, '');
+                        setLeverageStr(val);
+                        const num = parseInt(val, 10);
+                        if (!isNaN(num) && num >= 1 && num <= 20) {
+                          setLeverage(num);
+                        }
+                      }}
+                      onBlur={() => {
+                        const num = parseInt(leverageStr, 10);
+                        if (isNaN(num) || num < 1) {
+                          setLeverageStr('2');
+                          setLeverage(2);
+                        } else if (num > 20) {
+                          setLeverageStr('20');
+                          setLeverage(20);
+                        } else {
+                          setLeverageStr(num.toString());
+                          setLeverage(num);
+                        }
+                      }}
+                      className="w-full bg-dark-900 border border-dark-700 rounded-lg px-2 py-1 text-xs text-white font-mono text-center outline-none focus:border-emerald-500"
+                    />
+                    <span className="absolute right-2 top-1 text-[10px] text-slate-500 font-mono">x</span>
+                  </div>
+                </div>
+
+                {/* Quick Leverage Preset Pills */}
+                <div className="flex items-center justify-between gap-1 pt-0.5">
+                  {[1, 2, 3, 5, 10, 20].map((l) => (
+                    <button
+                      key={l}
+                      type="button"
+                      onClick={() => {
+                        setLeverage(l);
+                        setLeverageStr(l.toString());
+                      }}
+                      className={`flex-1 py-1 rounded text-[11px] font-mono font-semibold transition-colors border ${
+                        leverage === l
+                          ? l <= 3
+                            ? 'bg-emerald-600 text-white border-emerald-500'
+                            : 'bg-amber-600 text-white border-amber-500'
+                          : 'bg-dark-900 text-slate-400 border-dark-750 hover:text-white'
+                      }`}
+                    >
+                      {l}x
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex justify-between text-[10px] text-slate-400 mt-1.5 font-mono">
+                  <span>Buffer: ±{((1 / leverage) * 0.95 * 100).toFixed(1)}% price move</span>
+                  <span className={leverage > 3 ? 'text-amber-400' : 'text-emerald-400'}>
+                    {leverage > 5 ? '⚠️ High Liq Risk' : 'Survives market noise'}
+                  </span>
                 </div>
               </div>
 
