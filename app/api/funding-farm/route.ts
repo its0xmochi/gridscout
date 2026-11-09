@@ -4,6 +4,7 @@ import {
   SAMPLE_FUNDING_OPPORTUNITIES,
   normalizeFundingToHourly,
   VENUE_REGISTRY,
+  PERPS_STUDY_19_VENUES,
 } from '../../../lib/analytics/funding-farm';
 
 export const dynamic = 'force-dynamic';
@@ -11,6 +12,7 @@ export const revalidate = 60; // 60s cache
 
 // In-memory cache for fast responses
 let cachedArbs: FundingArbOpportunity[] | null = null;
+let cachedVenues: any[] | null = null;
 let lastCacheTime = 0;
 const CACHE_TTL_MS = 60 * 1000;
 
@@ -53,6 +55,7 @@ export async function GET() {
     return NextResponse.json({
       success: true,
       count: cachedArbs.length,
+      venues: cachedVenues || PERPS_STUDY_19_VENUES,
       opportunities: cachedArbs,
       cached: true,
       lastUpdated: lastCacheTime,
@@ -73,6 +76,7 @@ export async function GET() {
     if (res.ok) {
       const data = await res.json();
       const rawRows: any[] = data.rows || [];
+      const upstreamVenues: any[] = data.venues || PERPS_STUDY_19_VENUES;
 
       const parsed: FundingArbOpportunity[] = rawRows
         .filter((r) => r && r.asset && r.long && r.short && !r.soon)
@@ -142,11 +146,13 @@ export async function GET() {
         parsed.sort((a, b) => b.grossSpreadApr - a.grossSpreadApr);
 
         cachedArbs = parsed;
+        cachedVenues = upstreamVenues;
         lastCacheTime = now;
 
         return NextResponse.json({
           success: true,
           count: parsed.length,
+          venues: upstreamVenues,
           opportunities: parsed,
           cached: false,
           lastUpdated: now,
@@ -159,11 +165,13 @@ export async function GET() {
 
   // Fallback to verified benchmark dataset
   cachedArbs = SAMPLE_FUNDING_OPPORTUNITIES;
+  cachedVenues = PERPS_STUDY_19_VENUES;
   lastCacheTime = now;
 
   return NextResponse.json({
     success: true,
     count: SAMPLE_FUNDING_OPPORTUNITIES.length,
+    venues: PERPS_STUDY_19_VENUES,
     opportunities: SAMPLE_FUNDING_OPPORTUNITIES,
     cached: false,
     benchmarkFallback: true,

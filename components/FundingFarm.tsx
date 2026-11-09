@@ -11,6 +11,8 @@ import {
   LiveFarmPnLResult,
   SAMPLE_FUNDING_OPPORTUNITIES,
   VENUE_REGISTRY,
+  PERPS_STUDY_19_VENUES,
+  DexVenueConfig,
 } from '../lib/analytics/funding-farm';
 import {
   ShieldCheck,
@@ -46,21 +48,179 @@ import {
 import { Tooltip } from './Tooltip';
 
 export const VENUE_URLS: Record<string, string> = {
-  hyperliquid: 'https://app.hyperliquid.xyz/trade',
-  pacifica: 'https://app.pacifica.fi/trade',
-  variational: 'https://omni.variational.io',
-  txflow: 'https://app.txflow.com',
-  ondo: 'https://app.ondoperps.xyz',
+  bulk: 'https://bulk.trade',
+  real: 'https://real.xyz',
+  lighter: 'https://lighter.xyz',
+  lighter_rh: 'https://rh.lighter.xyz',
+  'lighter x rh': 'https://rh.lighter.xyz',
+  arcus: 'https://arcus.xyz',
+  risex: 'https://rise.trade',
+  txflow: 'https://txflow.com',
+  ondo: 'https://ondoperps.xyz',
   qfex: 'https://trade.qfex.com',
-  lighter: 'https://app.lighter.xyz',
-  phoenix: 'https://phoenix.trade',
+  variational: 'https://omni.variational.io',
   trade_xyz: 'https://trade.xyz',
   'trade.xyz': 'https://trade.xyz',
-  risex: 'https://app.risex.io',
-  entropy: 'https://app.entropy.trade',
-  arcus: 'https://arcus.exchange',
-  bulk: 'https://app.bulk.trade',
+  hl_xyz: 'https://trade.xyz',
+  hl_io: 'https://app.hyperliquid.xyz/trade',
+  entropy: 'https://app.hyperliquid.xyz/trade',
+  hl_hip3: 'https://app.hyperliquid.xyz',
+  'other hip3': 'https://app.hyperliquid.xyz',
+  'other hip-3': 'https://app.hyperliquid.xyz',
+  reya: 'https://reya.xyz',
+  popdex: 'https://popdex.xyz',
+  perpl: 'https://perpl.xyz',
+  katana: 'https://katana.network',
+  n1: 'https://n1.xyz',
+  imperial: 'https://imperial.trade',
+  hyperliquid: 'https://app.hyperliquid.xyz/trade',
+  pacifica: 'https://app.pacifica.fi/trade',
+  phoenix: 'https://phoenix.trade',
 };
+
+export function renderVenueIcon(venueNameOrId: string) {
+  const norm = venueNameOrId.toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  if (norm.includes('bulk')) {
+    return (
+      <span className="w-3.5 h-3.5 rounded-full bg-amber-950 flex items-center justify-center text-[10px] text-amber-300 font-bold shrink-0">
+        ✦
+      </span>
+    );
+  }
+  if (norm.includes('real')) {
+    return (
+      <span className="w-3.5 h-3.5 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center text-[8px] text-white font-bold shrink-0">
+        ◎
+      </span>
+    );
+  }
+  if (norm.includes('lighterrh') || norm.includes('rh')) {
+    return (
+      <span className="w-3.5 h-3.5 rounded-full bg-slate-900 flex items-center justify-center text-[9px] text-lime-400 font-bold shrink-0">
+        ⚡
+      </span>
+    );
+  }
+  if (norm.includes('lighter')) {
+    return (
+      <span className="w-3.5 h-3.5 rounded-full bg-slate-900 flex items-center justify-center text-[9px] text-white font-bold shrink-0">
+        ⚡
+      </span>
+    );
+  }
+  if (norm.includes('arcus')) {
+    return (
+      <span className="w-3.5 h-3.5 rounded-full bg-amber-950/80 flex items-center justify-center text-[8px] text-amber-400 font-bold shrink-0">
+        ▲
+      </span>
+    );
+  }
+  if (norm.includes('risex')) {
+    return (
+      <span className="w-3.5 h-3.5 rounded-full bg-teal-900 flex items-center justify-center text-[8px] text-teal-300 font-extrabold shrink-0">
+        ✕
+      </span>
+    );
+  }
+  if (norm.includes('txflow')) {
+    return (
+      <span className="w-3.5 h-3.5 rounded-full bg-emerald-950 flex items-center justify-center text-[8px] text-emerald-400 font-bold shrink-0">
+        ⇄
+      </span>
+    );
+  }
+  if (norm.includes('ondo')) {
+    return (
+      <span className="w-3.5 h-3.5 rounded-full bg-slate-900 flex items-center justify-center text-[8px] text-slate-300 font-bold shrink-0">
+        ◎
+      </span>
+    );
+  }
+  if (norm.includes('qfex')) {
+    return (
+      <span className="w-3.5 h-3.5 rounded-full bg-cyan-950 flex items-center justify-center text-[8px] text-cyan-300 font-extrabold shrink-0">
+        Q
+      </span>
+    );
+  }
+  if (norm.includes('variational')) {
+    return (
+      <span className="w-3.5 h-3.5 rounded-full bg-blue-950 flex items-center justify-center text-[8px] text-blue-400 font-extrabold shrink-0">
+        ▲
+      </span>
+    );
+  }
+  if (norm.includes('trade') || norm.includes('xyz')) {
+    return (
+      <span className="w-3.5 h-3.5 rounded bg-amber-950/70 border border-amber-800/60 flex items-center justify-center text-[7px] text-amber-300 font-mono font-bold shrink-0">
+        [x]
+      </span>
+    );
+  }
+  if (norm.includes('entropy') || norm.includes('io')) {
+    return (
+      <span className="w-3.5 h-3.5 rounded-full bg-slate-900 flex items-center justify-center text-[7px] text-white font-mono font-bold shrink-0">
+        io
+      </span>
+    );
+  }
+  if (norm.includes('hip3') || norm.includes('other')) {
+    return (
+      <span className="w-3.5 h-3.5 rounded-full bg-teal-950 flex items-center justify-center text-[8px] text-teal-300 font-bold shrink-0">
+        ⚯
+      </span>
+    );
+  }
+  if (norm.includes('reya')) {
+    return (
+      <span className="w-3.5 h-3.5 rounded-full bg-emerald-900 flex items-center justify-center text-[8px] text-emerald-300 font-extrabold shrink-0">
+        R
+      </span>
+    );
+  }
+  if (norm.includes('popdex')) {
+    return (
+      <span className="w-3.5 h-3.5 rounded-full bg-purple-950 flex items-center justify-center text-[8px] text-purple-300 font-extrabold shrink-0">
+        P
+      </span>
+    );
+  }
+  if (norm.includes('perpl')) {
+    return (
+      <span className="w-3.5 h-3.5 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center text-[8px] text-slate-200 font-extrabold shrink-0">
+        P
+      </span>
+    );
+  }
+  if (norm.includes('katana')) {
+    return (
+      <span className="w-3.5 h-3.5 rounded-full bg-yellow-950 flex items-center justify-center text-[8px] text-yellow-300 font-bold shrink-0">
+        ⚔
+      </span>
+    );
+  }
+  if (norm.includes('n1')) {
+    return (
+      <span className="w-3.5 h-3.5 rounded-full bg-slate-900 border border-slate-700 flex items-center justify-center text-[7px] text-white font-bold shrink-0">
+        N1
+      </span>
+    );
+  }
+  if (norm.includes('imperial')) {
+    return (
+      <span className="w-3.5 h-3.5 rounded-full bg-rose-950 flex items-center justify-center text-[8px] text-rose-300 font-bold shrink-0">
+        ♛
+      </span>
+    );
+  }
+
+  return (
+    <span className="w-3.5 h-3.5 rounded-full bg-emerald-950 flex items-center justify-center text-[8px] text-emerald-400 font-bold shrink-0">
+      ●
+    </span>
+  );
+}
 
 export function getVenueUrl(venueNameOrId: string, asset: string): string {
   const norm = venueNameOrId.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -91,10 +251,11 @@ export const FundingFarm: React.FC = () => {
   const [sustainableOnly, setSustainableOnly] = useState<boolean>(false);
   const [sortBy, setSortBy] = useState<'apr' | 'breakeven' | 'sustainability' | 'oi'>('apr');
 
-  // Venue Multi-Select Focus Filter
-  const [selectedVenues, setSelectedVenues] = useState<string[]>([]);
-  const [venueMatchMode, setVenueMatchMode] = useState<'both' | 'any'>('both');
-  const [isVenueModalOpen, setIsVenueModalOpen] = useState<boolean>(false);
+  // Venue Multi-Select Focus Filter (defaults to all 19 DEX venues, exactly like perps.study)
+  const [selectedVenues, setSelectedVenues] = useState<string[]>(() =>
+    PERPS_STUDY_19_VENUES.map((v) => v.displayName)
+  );
+  const [venueMatchMode, setVenueMatchMode] = useState<'both' | 'any'>('any');
 
   // Step 2: User Settings
   const [capitalUsd, setCapitalUsd] = useState<number>(1000);
@@ -138,7 +299,19 @@ export const FundingFarm: React.FC = () => {
         const savedVenues = localStorage.getItem('gridscout_farm_venues');
         if (savedVenues) {
           const parsed = JSON.parse(savedVenues);
-          if (Array.isArray(parsed)) setSelectedVenues(parsed);
+          if (Array.isArray(parsed)) {
+            // Strip out any legacy CEXes (Binance, Bybit)
+            const clean = parsed.filter(
+              (v: string) => !v.toLowerCase().includes('binance') && !v.toLowerCase().includes('bybit')
+            );
+            if (clean.length > 0) {
+              setSelectedVenues(clean);
+            } else {
+              setSelectedVenues(PERPS_STUDY_19_VENUES.map((v) => v.displayName));
+            }
+          }
+        } else {
+          setSelectedVenues(PERPS_STUDY_19_VENUES.map((v) => v.displayName));
         }
         const savedMatch = localStorage.getItem('gridscout_farm_venue_match');
         if (savedMatch === 'both' || savedMatch === 'any') setVenueMatchMode(savedMatch);
@@ -171,6 +344,28 @@ export const FundingFarm: React.FC = () => {
       } catch (e) {
         // ignore
       }
+    }
+  };
+
+  const isVenueSelected = (venueDisplayName: string) => {
+    const vNorm = venueDisplayName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    return selectedVenues.some((sv) => {
+      const svNorm = sv.toLowerCase().replace(/[^a-z0-9]/g, '');
+      return vNorm === svNorm || vNorm.includes(svNorm) || svNorm.includes(vNorm);
+    });
+  };
+
+  const toggleVenue = (venueDisplayName: string) => {
+    const isSelected = isVenueSelected(venueDisplayName);
+    if (isSelected) {
+      const next = selectedVenues.filter((sv) => {
+        const vNorm = venueDisplayName.toLowerCase().replace(/[^a-z0-9]/g, '');
+        const svNorm = sv.toLowerCase().replace(/[^a-z0-9]/g, '');
+        return !(vNorm === svNorm || vNorm.includes(svNorm) || svNorm.includes(vNorm));
+      });
+      saveVenues(next);
+    } else {
+      saveVenues([...selectedVenues, venueDisplayName]);
     }
   };
 
@@ -232,9 +427,14 @@ export const FundingFarm: React.FC = () => {
         if (o.grossSpreadApr < minApr) return false;
         if (sustainableOnly && o.sustainabilityBadge === 'Spike Trap') return false;
 
-        if (selectedVenues.length > 0) {
-          const longMatches = selectedVenues.includes(o.longLeg.venueName);
-          const shortMatches = selectedVenues.includes(o.shortLeg.venueName);
+        // Venue Focus Filtering (19 Official DEX Venues)
+        if (selectedVenues.length === 0) {
+          return false; // User deselected all venues
+        }
+
+        if (selectedVenues.length < PERPS_STUDY_19_VENUES.length) {
+          const longMatches = isVenueSelected(o.longLeg.venueName);
+          const shortMatches = isVenueSelected(o.shortLeg.venueName);
           if (venueMatchMode === 'both') {
             if (!longMatches || !shortMatches) return false;
           } else {
@@ -932,60 +1132,75 @@ Verified by GridScout · strictly read-only`;
                     />
                   </div>
 
-                  {/* VENUE FOCUS SELECTOR BUTTON & QUICK PILL */}
-                  <div className="p-2.5 rounded-xl bg-dark-900/90 border border-dark-750 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center space-x-1.5 text-xs font-semibold text-slate-200">
-                        <Target className="w-3.5 h-3.5 text-emerald-400" />
-                        <span>My Focus Perps:</span>
-                        <span className={`px-2 py-0.5 rounded text-[10px] font-bold ${
-                          selectedVenues.length > 0
-                            ? 'bg-emerald-950 text-emerald-300 border border-emerald-800'
-                            : 'bg-dark-750 text-slate-400'
-                        }`}>
-                          {selectedVenues.length === 0
-                            ? 'All DEXes'
-                            : `${selectedVenues.length} Selected (${venueMatchMode === 'both' ? 'Both legs' : 'Any leg'})`}
+                  {/* ================= VENUES 19/19 FILTER STRIP (Matching perps.study) ================= */}
+                  <div className="p-3 rounded-2xl bg-dark-900/95 border border-dark-750 space-y-2.5">
+                    <div className="flex flex-wrap items-center justify-between gap-2 border-b border-dark-800 pb-2">
+                      <div className="flex items-center space-x-2">
+                        <span className="text-[11px] font-extrabold text-white uppercase tracking-wider font-mono">
+                          VENUES
                         </span>
+                        <span
+                          className={`text-[11px] font-mono font-bold px-2 py-0.5 rounded-full ${
+                            selectedVenues.length === PERPS_STUDY_19_VENUES.length
+                              ? 'bg-emerald-950/80 text-emerald-300 border border-emerald-500/30'
+                              : selectedVenues.length > 0
+                              ? 'bg-emerald-950/60 text-emerald-400 border border-emerald-800/40'
+                              : 'bg-dark-800 text-slate-500 border border-dark-700'
+                          }`}
+                        >
+                          {selectedVenues.length} / {PERPS_STUDY_19_VENUES.length} selected
+                        </span>
+
+                        <button
+                          type="button"
+                          onClick={() => saveVenues(selectedVenues, venueMatchMode === 'both' ? 'any' : 'both')}
+                          className="px-2 py-0.5 rounded text-[10px] font-semibold bg-dark-800 hover:bg-dark-750 text-slate-300 border border-dark-700 transition-colors"
+                          title="Toggle strict pair matching (both legs in your list) vs flexible (at least one leg)"
+                        >
+                          {venueMatchMode === 'both' ? 'Strict (Both Legs)' : 'Flexible (≥1 Leg)'}
+                        </button>
                       </div>
 
-                      <button
-                        type="button"
-                        onClick={() => setIsVenueModalOpen(true)}
-                        className="px-2.5 py-1 rounded-lg text-[11px] font-bold bg-dark-750 hover:bg-dark-700 text-emerald-400 border border-dark-600 transition-colors flex items-center gap-1"
-                      >
-                        <SlidersHorizontal className="w-3 h-3" />
-                        <span>{selectedVenues.length === 0 ? 'Pick My Perps' : 'Edit Perps'}</span>
-                      </button>
-                    </div>
-
-                    {/* Active selected venues pills preview */}
-                    {selectedVenues.length > 0 && (
-                      <div className="flex flex-wrap items-center gap-1 pt-1">
-                        {selectedVenues.map((v) => (
-                          <span
-                            key={v}
-                            className="px-2 py-0.5 rounded text-[10px] font-medium bg-emerald-950/60 text-emerald-300 border border-emerald-800/60 flex items-center gap-1"
-                          >
-                            {v}
-                            <button
-                              type="button"
-                              onClick={() => saveVenues(selectedVenues.filter((x) => x !== v))}
-                              className="text-slate-400 hover:text-white"
-                            >
-                              ×
-                            </button>
-                          </span>
-                        ))}
+                      <div className="flex items-center space-x-2 text-xs font-semibold">
+                        <button
+                          type="button"
+                          onClick={() => saveVenues(PERPS_STUDY_19_VENUES.map((v) => v.displayName))}
+                          className="text-slate-400 hover:text-white transition-colors text-[11px]"
+                        >
+                          Select All
+                        </button>
+                        <span className="text-slate-700">|</span>
                         <button
                           type="button"
                           onClick={() => saveVenues([])}
-                          className="text-[10px] text-slate-400 hover:text-red-400 underline ml-1"
+                          className="text-emerald-400 hover:text-emerald-300 transition-colors text-[11px]"
                         >
-                          Reset to All
+                          Deselect All
                         </button>
                       </div>
-                    )}
+                    </div>
+
+                    {/* 19 Interactive DEX Venue Pills */}
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {PERPS_STUDY_19_VENUES.map((v) => {
+                        const isSelected = isVenueSelected(v.displayName);
+                        return (
+                          <button
+                            key={v.id}
+                            type="button"
+                            onClick={() => toggleVenue(v.displayName)}
+                            className={`flex items-center space-x-1.5 px-2.5 py-1 rounded-xl text-xs font-medium border transition-all active:scale-95 ${
+                              isSelected
+                                ? 'bg-emerald-950/50 border-emerald-500/80 text-emerald-300 font-semibold shadow-sm shadow-emerald-950/50'
+                                : 'bg-dark-900 border-dark-750 text-slate-500 hover:text-slate-300 hover:border-dark-700 opacity-60 hover:opacity-100'
+                            }`}
+                          >
+                            {renderVenueIcon(v.displayName)}
+                            <span className="whitespace-nowrap">{v.displayName}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
 
                   {/* Filter Pills (Category, Points, Sustainable Only, Sort) */}
@@ -1720,139 +1935,6 @@ Verified by GridScout · strictly read-only`;
                   </div>
                 </div>
               </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ================= VENUE SELECTION MODAL ================= */}
-      {isVenueModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-fadeIn">
-          <div className="bg-dark-850 border border-dark-700 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
-            <div className="flex items-center justify-between border-b border-dark-750 pb-3">
-              <div className="flex items-center space-x-2">
-                <Target className="w-5 h-5 text-emerald-400" />
-                <h3 className="text-base font-bold text-white">Select My Focus Perps</h3>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsVenueModalOpen(false)}
-                className="text-slate-400 hover:text-white text-lg font-bold px-2 py-0.5 rounded-lg hover:bg-dark-800"
-              >
-                ✕
-              </button>
-            </div>
-
-            <p className="text-xs text-slate-400">
-              Check the perp DEXes you trade on. GridScout will filter the arbitrage scanner so you only see opportunities that involve your selected exchanges.
-            </p>
-
-            {/* Match Mode Selector */}
-            <div className="p-3 rounded-xl bg-dark-900 border border-dark-750 space-y-2">
-              <span className="text-[11px] font-bold text-slate-300 uppercase tracking-wide block">
-                Pair Matching Rule
-              </span>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setVenueMatchMode('both')}
-                  className={`p-2 rounded-lg text-left border text-xs transition-all ${
-                    venueMatchMode === 'both'
-                      ? 'bg-emerald-950/60 border-emerald-500 text-emerald-300 font-bold'
-                      : 'bg-dark-800 border-dark-700 text-slate-400'
-                  }`}
-                >
-                  <div>Both Legs (Strict)</div>
-                  <div className="text-[10px] font-normal text-slate-400">Both Long and Short must be in my list</div>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setVenueMatchMode('any')}
-                  className={`p-2 rounded-lg text-left border text-xs transition-all ${
-                    venueMatchMode === 'any'
-                      ? 'bg-emerald-950/60 border-emerald-500 text-emerald-300 font-bold'
-                      : 'bg-dark-800 border-dark-700 text-slate-400'
-                  }`}
-                >
-                  <div>At Least 1 Leg (Flexible)</div>
-                  <div className="text-[10px] font-normal text-slate-400">Either Long or Short in my list</div>
-                </button>
-              </div>
-            </div>
-
-            {/* Quick Presets */}
-            <div className="flex flex-wrap items-center gap-1.5 pt-1">
-              <span className="text-[11px] text-slate-400">Presets:</span>
-              <button
-                type="button"
-                onClick={() =>
-                  setSelectedVenues(['Hyperliquid', 'Pacifica', 'Variational', 'TxFlow', 'QFEX', 'Ondo', 'Lighter'])
-                }
-                className="px-2 py-0.5 rounded bg-dark-800 hover:bg-dark-750 text-[10px] font-semibold text-amber-300 border border-amber-800/40"
-              >
-                Airdrop &amp; Points Focus
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelectedVenues(['Hyperliquid', 'Other HIP-3', 'Trade.xyz'])}
-                className="px-2 py-0.5 rounded bg-dark-800 hover:bg-dark-750 text-[10px] font-semibold text-emerald-300 border border-emerald-800/40"
-              >
-                Hyperliquid + HIP-3
-              </button>
-              <button
-                type="button"
-                onClick={() => setSelectedVenues([])}
-                className="px-2 py-0.5 rounded bg-dark-800 hover:bg-dark-750 text-[10px] font-semibold text-slate-400"
-              >
-                Select All
-              </button>
-            </div>
-
-            {/* Venue Checkboxes Grid */}
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 max-h-60 overflow-y-auto pr-1 pt-1">
-              {allAvailableVenues.map((v) => {
-                const isChecked = selectedVenues.includes(v);
-                return (
-                  <label
-                    key={v}
-                    className={`flex items-center space-x-2 p-2 rounded-xl border text-xs cursor-pointer transition-all ${
-                      isChecked
-                        ? 'bg-emerald-950/40 border-emerald-500/80 text-white font-semibold'
-                        : 'bg-dark-900 border-dark-750 text-slate-400 hover:text-white'
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={isChecked}
-                      onChange={() => {
-                        if (isChecked) {
-                          saveVenues(selectedVenues.filter((x) => x !== v));
-                        } else {
-                          saveVenues([...selectedVenues, v]);
-                        }
-                      }}
-                      className="accent-emerald-500 rounded"
-                    />
-                    <span className="truncate">{v}</span>
-                  </label>
-                );
-              })}
-            </div>
-
-            <div className="flex items-center justify-between border-t border-dark-750 pt-3">
-              <span className="text-xs text-slate-400">
-                {selectedVenues.length === 0 ? 'All DEXes active' : `${selectedVenues.length} DEXes selected`}
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  saveVenues(selectedVenues);
-                  setIsVenueModalOpen(false);
-                }}
-                className="px-4 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs shadow-lg shadow-emerald-950/50"
-              >
-                Save &amp; Apply Filter
-              </button>
             </div>
           </div>
         </div>
