@@ -377,17 +377,17 @@ export const FundingFarm: React.FC = () => {
     const vNorm = venueDisplayName.toLowerCase().replace(/[^a-z0-9]/g, '');
     return selectedVenues.some((sv) => {
       const svNorm = sv.toLowerCase().replace(/[^a-z0-9]/g, '');
-      return vNorm === svNorm || vNorm.includes(svNorm) || svNorm.includes(vNorm);
+      return vNorm === svNorm;
     });
   };
 
   const toggleVenue = (venueDisplayName: string) => {
+    const vNorm = venueDisplayName.toLowerCase().replace(/[^a-z0-9]/g, '');
     const isSelected = isVenueSelected(venueDisplayName);
     if (isSelected) {
       const next = selectedVenues.filter((sv) => {
-        const vNorm = venueDisplayName.toLowerCase().replace(/[^a-z0-9]/g, '');
         const svNorm = sv.toLowerCase().replace(/[^a-z0-9]/g, '');
-        return !(vNorm === svNorm || vNorm.includes(svNorm) || svNorm.includes(vNorm));
+        return vNorm !== svNorm;
       });
       saveVenues(next);
     } else {
@@ -455,6 +455,17 @@ export const FundingFarm: React.FC = () => {
     return opp.grossSpreadApr;
   };
 
+  // Spike Trap Detector: live spread is high but 24h average is negative/low or collapsing
+  const isOppSpikeTrap = (opp: FundingArbOpportunity): boolean => {
+    if (opp.sustainabilityBadge === 'Spike Trap') return true;
+    const spread24h = getSpreadForTimeframe(opp, '24h');
+    // High live spread (>= 30%) but 24h average is non-positive or very low (<= 10%)
+    if (opp.grossSpreadApr >= 30 && spread24h <= 10) return true;
+    // Flash spike: live rate is 2.5x higher than 24h average
+    if (opp.grossSpreadApr >= 50 && spread24h > 0 && opp.grossSpreadApr >= spread24h * 2.5) return true;
+    return false;
+  };
+
   // Reset pagination when any filter changes
   useEffect(() => {
     setCurrentPage(1);
@@ -476,7 +487,7 @@ export const FundingFarm: React.FC = () => {
       .filter((o) => {
         if (categoryFilter !== 'all' && o.category !== categoryFilter) return false;
         if (onlyPoints && !o.pointsEligible) return false;
-        if (sustainableOnly && o.sustainabilityBadge === 'Spike Trap') return false;
+        if (sustainableOnly && isOppSpikeTrap(o)) return false;
 
         const effSpread = getSpreadForTimeframe(o, timeframeFilter);
         if (minAprFilter > 0 && effSpread < minAprFilter) return false;
@@ -2064,12 +2075,24 @@ Verified by GridScout · strictly read-only`;
 
                               {/* APR */}
                               <td className="py-3 px-3">
-                                <span className="text-base font-extrabold text-emerald-400 font-mono">
+                                <span className={`text-base font-extrabold font-mono ${
+                                  spread >= 0 ? 'text-emerald-400' : 'text-red-400'
+                                }`}>
                                   {spread.toFixed(2)}%
                                 </span>
-                                <span className="block text-[10px] text-slate-500">
-                                  {timeframeFilter === 'live' ? 'Live spread' : `${timeframeFilter} avg`}
-                                </span>
+                                <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
+                                  <span className="text-[10px] text-slate-500 whitespace-nowrap">
+                                    {timeframeFilter === 'live' ? 'Live spread' : `${timeframeFilter} avg`}
+                                  </span>
+                                  {isOppSpikeTrap(opp) && (
+                                    <span
+                                      className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-red-950/80 text-red-400 border border-red-800/60 whitespace-nowrap"
+                                      title="Live APR is disconnected from 24h average. High risk of immediate rate collapse."
+                                    >
+                                      Spike Trap
+                                    </span>
+                                  )}
+                                </div>
                               </td>
 
                               {/* BEST STRATEGY */}
@@ -2342,15 +2365,21 @@ Verified by GridScout · strictly read-only`;
                               <span className="text-slate-600">→</span>
                               <span className="text-red-400 font-medium">Short: {opp.shortLeg.venueName}</span>
                             </div>
-                            <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
-                              opp.sustainabilityBadge === 'High'
-                                ? 'bg-emerald-900/40 text-emerald-300'
-                                : opp.sustainabilityBadge === 'Moderate'
-                                ? 'bg-amber-900/40 text-amber-300'
-                                : 'bg-red-900/40 text-red-300'
-                            }`}>
-                              {opp.sustainabilityBadge}
-                            </span>
+                            {(() => {
+                              const isTrap = isOppSpikeTrap(opp);
+                              const badgeText = isTrap ? 'Spike Trap' : opp.sustainabilityBadge;
+                              return (
+                                <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${
+                                  isTrap
+                                    ? 'bg-red-900/60 text-red-300 border border-red-800/60'
+                                    : opp.sustainabilityBadge === 'High'
+                                    ? 'bg-emerald-900/40 text-emerald-300'
+                                    : 'bg-amber-900/40 text-amber-300'
+                                }`}>
+                                  {badgeText}
+                                </span>
+                              );
+                            })()}
                           </div>
                         </div>
                       );

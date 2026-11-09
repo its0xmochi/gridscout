@@ -30,12 +30,27 @@ function inferCategory(asset: string): 'crypto' | 'rwa' | 'fx' | 'commodity' {
   return 'crypto';
 }
 
-function calculateSustainability(spreadApr: number, longVenue: string, shortVenue: string): {
+function calculateSustainability(
+  spreadApr: number,
+  longVenue: string,
+  shortVenue: string,
+  spread24h?: number
+): {
   score: number;
   badge: 'High' | 'Moderate' | 'Spike Trap';
 } {
   const blueChipVenues = ['hyperliquid', 'pacifica', 'variational', 'ondo', 'qfex', 'lighter', 'txflow'];
   const isBlueChip = blueChipVenues.includes(longVenue.toLowerCase()) && blueChipVenues.includes(shortVenue.toLowerCase());
+
+  // 1. If 24h spread is negative or <= 10% while live APR is high (>= 30%), it's a spike trap
+  if (typeof spread24h === 'number') {
+    if (spreadApr >= 30 && spread24h <= 10) {
+      return { score: 25, badge: 'Spike Trap' };
+    }
+    if (spreadApr >= 50 && spread24h > 0 && spreadApr >= spread24h * 2.5) {
+      return { score: 40, badge: 'Spike Trap' };
+    }
+  }
 
   if (spreadApr > 300) {
     // Extreme spreads are almost always transient 1-hour spikes
@@ -95,8 +110,6 @@ export async function GET() {
           const shortApr = Number(r.short.apr) || 0;
           const spreadApr = Number(r.spread_apr) ?? (shortApr - longApr);
 
-          const { score, badge } = calculateSustainability(spreadApr, longV, shortV);
-
           // Points check
           const pointsVenues: string[] = [];
           if (VENUE_REGISTRY[longV]?.hasPointsProgram) pointsVenues.push(VENUE_REGISTRY[longV].name);
@@ -137,6 +150,13 @@ export async function GET() {
               if (Array.isArray(v)) shortIv[k] = v[0];
             });
           }
+
+          let spread24h: number | undefined = undefined;
+          if (typeof shortIv['24h'] === 'number' && typeof longIv['24h'] === 'number') {
+            spread24h = shortIv['24h'] - longIv['24h'];
+          }
+
+          const { score, badge } = calculateSustainability(spreadApr, longV, shortV, spread24h);
 
           return {
             id: `arb_${asset}_${longV}_${shortV}_${idx}`,
