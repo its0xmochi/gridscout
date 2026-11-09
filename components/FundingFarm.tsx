@@ -1006,6 +1006,33 @@ Verified by GridScout · strictly read-only`;
               </div>
             </div>
 
+            {/* Warning Callout if Spike Trap Selected */}
+            {activeOpp.sustainabilityBadge === 'Spike Trap' && (
+              <div className="p-3.5 rounded-xl bg-red-950/40 border border-red-500/40 flex items-start gap-2.5 text-xs text-red-200">
+                <AlertTriangle className="w-4 h-4 text-red-400 shrink-0 mt-0.5" />
+                <div className="space-y-1">
+                  <div className="font-bold text-red-300 flex items-center gap-1.5">
+                    <span>⚠️ Spike Trap Warning: Extreme Rate Risk</span>
+                    <span className="text-[10px] px-1.5 py-0.2 rounded bg-red-900/60 text-red-300 font-mono">
+                      Avoid for Manual Farming
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-red-200/90 leading-relaxed">
+                    This pair shows an extreme +{activeOpp.grossSpreadApr.toFixed(1)}% APR, but it is an erratic 1-hour spike on thin liquidity. If the rate collapses or flips after 1 hour, entry/exit taker fees will wipe out your funding. We strongly recommend sticking to <strong>High or Moderate sustainability pairs</strong>.
+                  </p>
+                  <div className="pt-0.5">
+                    <button
+                      type="button"
+                      onClick={() => setSustainableOnly(true)}
+                      className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-[11px] font-bold shadow-md shadow-emerald-950/40"
+                    >
+                      🛡️ Click to Hide Spike Traps (Show Safe Pairs)
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Main Headline Profit Card */}
             <div className="rounded-xl bg-gradient-to-br from-dark-900 to-dark-800 border border-dark-700 p-4 sm:p-5">
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
