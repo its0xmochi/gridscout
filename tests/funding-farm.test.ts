@@ -3,6 +3,7 @@ import {
   normalizeFundingToHourly,
   calculateNetSpread,
   analyzeFundingFarm,
+  calculateLiveFarmPnL,
   FundingArbOpportunity,
   UserFarmSettings,
   SAMPLE_FUNDING_OPPORTUNITIES,
@@ -149,5 +150,70 @@ describe('Funding Farm Analytics Engine (Perp-vs-Perp Delta Neutral)', () => {
     expect(analysis.executionPlaybook.step2EntryOrder).toContain('MARKET SHORT');
     expect(analysis.executionPlaybook.step3MirroredRisk).toContain('Stop-Loss');
     expect(analysis.executionPlaybook.step5SimultaneousExit).toContain('exit both positions simultaneously');
+  });
+
+  it('tracks active farm position PnL, hours elapsed, and break-even progress', () => {
+    const entryTime = Date.now() - 48 * 3600 * 1000; // 48 hours ago
+    const mockPosition = {
+      id: 'farm_1',
+      asset: 'SOL',
+      category: 'crypto' as const,
+      longVenue: 'Hyperliquid',
+      shortVenue: 'Pacifica',
+      longVenueId: 'hyperliquid',
+      shortVenueId: 'pacifica',
+      capitalUsd: 1000,
+      leverage: 2,
+      notionalPerLegUsd: 1000,
+      entrySpreadApr: 45.0, // 45% APR spread
+      entryTimestamp: entryTime,
+      entryFeeUsd: 0.75,
+      estExitFeeUsd: 0.75,
+      status: 'active' as const,
+    };
+
+    const pnl = calculateLiveFarmPnL(mockPosition, 45.0);
+
+    // 48 hours held
+    expect(pnl.hoursElapsed).toBeCloseTo(48, 1);
+    expect(pnl.daysElapsed).toBeCloseTo(2, 1);
+
+    // Gross hourly funding: $1000 * (45 / 100) / (24 * 365) = ~$0.05136 / hr
+    // For 48 hours = ~$2.46
+    expect(pnl.accumulatedFundingUsd).toBeGreaterThan(2.0);
+
+    // Total fees: $0.75 + $0.75 = $1.50
+    expect(pnl.totalRoundTripFeesUsd).toBe(1.50);
+
+    // Net profit = ~$2.46 - $1.50 = ~$0.96 (profitable, past break-even!)
+    expect(pnl.netProfitUsd).toBeGreaterThan(0);
+    expect(pnl.isPastBreakEven).toBe(true);
+    expect(pnl.healthStatus).toBe('profitable');
+  });
+
+  it('detects rate flip warning when live spread turns negative', () => {
+    const entryTime = Date.now() - 12 * 3600 * 1000; // 12 hours ago
+    const mockPosition = {
+      id: 'farm_2',
+      asset: 'ETH',
+      category: 'crypto' as const,
+      longVenue: 'Variational',
+      shortVenue: 'TxFlow',
+      longVenueId: 'variational',
+      shortVenueId: 'txflow',
+      capitalUsd: 1000,
+      leverage: 2,
+      notionalPerLegUsd: 1000,
+      entrySpreadApr: 30.0,
+      entryTimestamp: entryTime,
+      entryFeeUsd: 1.0,
+      estExitFeeUsd: 1.0,
+      status: 'active' as const,
+    };
+
+    // Live spread flipped to -5.0%
+    const pnl = calculateLiveFarmPnL(mockPosition, -5.0);
+    expect(pnl.hasFlipped).toBe(true);
+    expect(pnl.healthStatus).toBe('flipped_warning');
   });
 });

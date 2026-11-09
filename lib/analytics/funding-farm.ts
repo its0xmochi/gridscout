@@ -792,3 +792,91 @@ export const SAMPLE_FUNDING_OPPORTUNITIES: FundingArbOpportunity[] = [
     lastUpdated: Date.now(),
   },
 ];
+
+export interface ActiveFarmPosition {
+  id: string;
+  asset: string;
+  category: 'crypto' | 'rwa' | 'fx' | 'commodity';
+  longVenue: string;
+  shortVenue: string;
+  longVenueId: string;
+  shortVenueId: string;
+  capitalUsd: number;
+  leverage: number;
+  notionalPerLegUsd: number;
+  entrySpreadApr: number;
+  entryTimestamp: number; // ms
+  entryFeeUsd: number;
+  estExitFeeUsd: number;
+  notes?: string;
+  status: 'active' | 'closed';
+  closedTimestamp?: number;
+  actualNetProfitUsd?: number;
+}
+
+export interface LiveFarmPnLResult {
+  hoursElapsed: number;
+  daysElapsed: number;
+  effectiveSpreadApr: number;
+  accumulatedFundingUsd: number;
+  totalRoundTripFeesUsd: number;
+  netProfitUsd: number;
+  netYieldPct: number;
+  isPastBreakEven: boolean;
+  hoursUntilBreakEven: number;
+  hasFlipped: boolean;
+  healthStatus: 'profitable' | 'covering_fees' | 'flipped_warning';
+}
+
+/**
+ * Calculates live real-time PnL, hours held, fees paid, and break-even status
+ * for an active tracked funding farming position
+ */
+export function calculateLiveFarmPnL(
+  pos: ActiveFarmPosition,
+  currentLiveSpreadApr?: number,
+  asOfTimestamp: number = Date.now()
+): LiveFarmPnLResult {
+  const endTime = pos.status === 'closed' && pos.closedTimestamp ? pos.closedTimestamp : asOfTimestamp;
+  const msElapsed = Math.max(0, endTime - pos.entryTimestamp);
+  const hoursElapsed = msElapsed / (1000 * 3600);
+  const daysElapsed = hoursElapsed / 24;
+
+  const effectiveSpreadApr = typeof currentLiveSpreadApr === 'number' ? currentLiveSpreadApr : pos.entrySpreadApr;
+  const hourlySpreadFraction = (effectiveSpreadApr / 100) / (24 * 365);
+
+  const accumulatedFundingUsd = pos.notionalPerLegUsd * hourlySpreadFraction * hoursElapsed;
+  const totalRoundTripFeesUsd = pos.entryFeeUsd + pos.estExitFeeUsd;
+  const netProfitUsd = accumulatedFundingUsd - totalRoundTripFeesUsd;
+  const netYieldPct = pos.capitalUsd > 0 ? (netProfitUsd / pos.capitalUsd) * 100 : 0;
+
+  const hourlyEarningUsd = pos.notionalPerLegUsd * hourlySpreadFraction;
+  let hoursUntilBreakEven = 0;
+  if (netProfitUsd < 0 && hourlyEarningUsd > 0) {
+    hoursUntilBreakEven = Math.abs(netProfitUsd) / hourlyEarningUsd;
+  }
+
+  const isPastBreakEven = netProfitUsd >= 0;
+  const hasFlipped = effectiveSpreadApr <= 0;
+
+  let healthStatus: 'profitable' | 'covering_fees' | 'flipped_warning' = 'covering_fees';
+  if (hasFlipped) {
+    healthStatus = 'flipped_warning';
+  } else if (isPastBreakEven) {
+    healthStatus = 'profitable';
+  }
+
+  return {
+    hoursElapsed,
+    daysElapsed,
+    effectiveSpreadApr,
+    accumulatedFundingUsd,
+    totalRoundTripFeesUsd,
+    netProfitUsd,
+    netYieldPct,
+    isPastBreakEven,
+    hoursUntilBreakEven,
+    hasFlipped,
+    healthStatus,
+  };
+}
