@@ -77,11 +77,13 @@ export async function GET() {
       const data = await res.json();
       const rawRows: any[] = data.rows || [];
       const upstreamVenues: any[] = data.venues || PERPS_STUDY_19_VENUES;
+      const assetsMap: Record<string, any[]> = data.assets || {};
 
       const parsed: FundingArbOpportunity[] = rawRows
         .filter((r) => r && r.asset && r.long && r.short && !r.soon)
         .map((r, idx) => {
-          const asset = String(r.asset).toUpperCase();
+          const rawAssetStr = String(r.asset);
+          const asset = rawAssetStr.toUpperCase();
           const category = inferCategory(asset);
           const longV = String(r.long.v || '').toLowerCase();
           const shortV = String(r.short.v || '').toLowerCase();
@@ -100,8 +102,41 @@ export async function GET() {
           if (VENUE_REGISTRY[longV]?.hasPointsProgram) pointsVenues.push(VENUE_REGISTRY[longV].name);
           if (VENUE_REGISTRY[shortV]?.hasPointsProgram) pointsVenues.push(VENUE_REGISTRY[shortV].name);
 
-          // Approximate mark price and price spread
-          const priceSpreadBps = Number(r.price_spread_bps) || (category === 'crypto' ? 3.5 : 5.0);
+          // Asset metadata lookup for Vol, OI, Prices, and IV
+          const aList = assetsMap[rawAssetStr] || assetsMap[asset] || [];
+          const longMeta = aList.find((x) => x.v === r.long.v) || {};
+          const shortMeta = aList.find((x) => x.v === r.short.v) || {};
+
+          const longPx = Number(longMeta.px ?? r.long.px) || undefined;
+          const shortPx = Number(shortMeta.px ?? r.short.px) || undefined;
+          const longVol = Number(longMeta.vol) || undefined;
+          const shortVol = Number(shortMeta.vol) || undefined;
+          const longOi = Number(longMeta.oi) || undefined;
+          const shortOi = Number(shortMeta.oi) || undefined;
+
+          // Price spread percentage: ((shortPx - longPx) / longPx) * 100
+          let priceSpreadPct: number | undefined = undefined;
+          if (longPx && shortPx && longPx > 0) {
+            priceSpreadPct = ((shortPx - longPx) / longPx) * 100;
+          }
+          const priceSpreadBps = priceSpreadPct !== undefined ? Math.abs(priceSpreadPct * 100) : (category === 'crypto' ? 3.5 : 5.0);
+
+          const totalOiUsd = (longOi && shortOi) ? (longOi + shortOi) : Number(r.oi) || 25000000;
+          const totalVolUsd = (longVol || 0) + (shortVol || 0);
+
+          // Interval APRs from metadata
+          const longIv: Record<string, number> = {};
+          if (longMeta.iv) {
+            Object.entries(longMeta.iv).forEach(([k, v]: [string, any]) => {
+              if (Array.isArray(v)) longIv[k] = v[0];
+            });
+          }
+          const shortIv: Record<string, number> = {};
+          if (shortMeta.iv) {
+            Object.entries(shortMeta.iv).forEach(([k, v]: [string, any]) => {
+              if (Array.isArray(v)) shortIv[k] = v[0];
+            });
+          }
 
           return {
             id: `arb_${asset}_${longV}_${shortV}_${idx}`,
@@ -115,7 +150,10 @@ export async function GET() {
               rawApr: longApr,
               intervalHours: longInterval,
               normalizedHourlyPct: normalizeFundingToHourly(longApr, longInterval),
-              markPrice: Number(r.long.px) || undefined,
+              markPrice: longPx,
+              openInterestUsd: longOi,
+              volume24hUsd: longVol,
+              intervalAprs: Object.keys(longIv).length > 0 ? longIv : undefined,
               stale: !!r.long.stale,
             },
             shortLeg: {
@@ -126,17 +164,22 @@ export async function GET() {
               rawApr: shortApr,
               intervalHours: shortInterval,
               normalizedHourlyPct: normalizeFundingToHourly(shortApr, shortInterval),
-              markPrice: Number(r.short.px) || undefined,
+              markPrice: shortPx,
+              openInterestUsd: shortOi,
+              volume24hUsd: shortVol,
+              intervalAprs: Object.keys(shortIv).length > 0 ? shortIv : undefined,
               stale: !!r.short.stale,
             },
             grossSpreadApr: spreadApr,
             netHourlyYieldPct: normalizeFundingToHourly(spreadApr, 1),
             priceSpreadBps,
+            priceSpreadPct,
             sustainabilityScore: score,
             sustainabilityBadge: badge,
             pointsEligible: pointsVenues.length > 0,
             pointsVenues,
-            totalOiUsd: Number(r.oi) || 25000000,
+            totalOiUsd,
+            totalVolume24hUsd: totalVolUsd > 0 ? totalVolUsd : undefined,
             lastUpdated: now,
           };
         });

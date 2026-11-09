@@ -314,7 +314,9 @@ export interface ArbLeg {
   normalizedHourlyPct: number;
   markPrice?: number;
   openInterestUsd?: number;
+  volume24hUsd?: number;
   stale?: boolean;
+  intervalAprs?: Record<string, number>;
 }
 
 export interface FundingArbOpportunity {
@@ -326,11 +328,13 @@ export interface FundingArbOpportunity {
   grossSpreadApr: number;
   netHourlyYieldPct: number;
   priceSpreadBps: number;
+  priceSpreadPct?: number;
   sustainabilityScore: number; // 0 - 100
   sustainabilityBadge: 'High' | 'Moderate' | 'Spike Trap';
   pointsEligible: boolean;
   pointsVenues: string[];
   totalOiUsd: number;
+  totalVolume24hUsd?: number;
   lastUpdated: number;
 }
 
