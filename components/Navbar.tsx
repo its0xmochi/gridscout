@@ -51,12 +51,19 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
 
         <div className="flex items-center space-x-4">
-          <nav className="flex items-center space-x-1 sm:space-x-3 text-xs font-semibold">
+          <nav className="flex items-center space-x-1 sm:space-x-2 text-xs font-semibold">
             <Link
               href="/"
               className="px-2.5 py-1.5 rounded-lg text-slate-300 hover:text-white hover:bg-slate-800 transition-colors"
             >
-              Scanner
+              Grid Advisor
+            </Link>
+            <Link
+              href="/funding-farm"
+              className="px-2.5 py-1.5 rounded-lg text-emerald-400 hover:text-emerald-300 bg-emerald-950/40 border border-emerald-500/30 hover:bg-emerald-950/70 transition-colors flex items-center gap-1.5"
+            >
+              <span>Funding Farm</span>
+              <span className="text-[9px] font-bold px-1 py-0.2 rounded bg-emerald-500/20 text-emerald-300 uppercase">New</span>
             </Link>
             <Link
               href="/track-record"

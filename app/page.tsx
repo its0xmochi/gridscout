@@ -9,9 +9,10 @@ import { MarketTable } from '../components/MarketTable';
 import { MetricCard } from '../components/MetricCard';
 import { Tooltip } from '../components/Tooltip';
 import { GridAdvisor } from '../components/GridAdvisor';
+import { FundingFarm } from '../components/FundingFarm';
 import { ScanSnapshot, ScannedMarketData } from '../lib/storage/db';
 import { RangeType } from '../lib/analytics/ranges';
-import { Clock, RefreshCw, AlertCircle, HelpCircle, Sparkles, Sliders } from 'lucide-react';
+import { Clock, RefreshCw, AlertCircle, HelpCircle, Sparkles, Sliders, Zap } from 'lucide-react';
 
 export default function HomePage() {
   const [snapshot, setSnapshot] = useState<ScanSnapshot | null>(null);
@@ -21,8 +22,8 @@ export default function HomePage() {
   const [scanMessage, setScanMessage] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
 
-  // View Mode: Simple Grid Advisor (default) vs Advanced Mode
-  const [viewMode, setViewMode] = useState<'advisor' | 'advanced'>('advisor');
+  // View Mode: Simple Grid Advisor (default) vs Funding Farm vs Advanced Mode
+  const [viewMode, setViewMode] = useState<'advisor' | 'funding_farm' | 'advanced'>('advisor');
 
   // Filters state
   const [selectedDex, setSelectedDex] = useState<string>('all');
@@ -43,6 +44,11 @@ export default function HomePage() {
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams(window.location.search);
+      if (params.get('view') === 'funding_farm' || params.get('tab') === 'funding_farm') {
+        setViewMode('funding_farm');
+      } else if (params.get('view') === 'advanced') {
+        setViewMode('advanced');
+      }
       if (params.get('dex')) setSelectedDex(params.get('dex')!);
       if (params.get('search')) setSearchQuery(params.get('search')!);
       if (params.get('minVol')) setMinVolume(Number(params.get('minVol')) || 250000);
@@ -59,6 +65,7 @@ export default function HomePage() {
   useEffect(() => {
     if (typeof window !== 'undefined') {
       const params = new URLSearchParams();
+      if (viewMode !== 'advisor') params.set('view', viewMode);
       if (selectedDex !== 'all') params.set('dex', selectedDex);
       if (searchQuery) params.set('search', searchQuery);
       if (minVolume !== 250000) params.set('minVol', minVolume.toString());
@@ -336,44 +343,65 @@ export default function HomePage() {
           errorMessage={snapshot?.errorMessage || error || undefined}
         />
 
-        {/* View Mode Switcher: Simple Grid Advisor (Default) vs Advanced View */}
+        {/* View Mode Switcher: Simple Grid Advisor (Default) vs Funding Farm vs Advanced View */}
         <div className="flex flex-col sm:flex-row items-center justify-between gap-3 bg-slate-900/90 border border-slate-800 p-3 rounded-2xl">
-          <div className="flex items-center space-x-2">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => setViewMode('advisor')}
-              className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center space-x-2 transition-all ${
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-all ${
                 viewMode === 'advisor'
                   ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               <Sparkles className="w-3.5 h-3.5" />
-              <span>Grid Advisor (Simple 3-Step)</span>
+              <span>Grid Advisor</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={() => setViewMode('funding_farm')}
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-all ${
+                viewMode === 'funding_farm'
+                  ? 'bg-emerald-500 text-slate-950 shadow-md shadow-emerald-500/20'
+                  : 'text-emerald-400 hover:text-emerald-300'
+              }`}
+            >
+              <Zap className="w-3.5 h-3.5" />
+              <span>Funding Farm (Perp Arb)</span>
+              <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 uppercase">
+                New
+              </span>
             </button>
 
             <button
               type="button"
               onClick={() => setViewMode('advanced')}
-              className={`px-4 py-2 rounded-xl text-xs font-bold flex items-center space-x-2 transition-all ${
+              className={`px-3.5 py-2 rounded-xl text-xs font-bold flex items-center space-x-1.5 transition-all ${
                 viewMode === 'advanced'
                   ? 'bg-slate-800 text-sky-400 border border-slate-700 shadow-md'
                   : 'text-slate-400 hover:text-slate-200'
               }`}
             >
               <Sliders className="w-3.5 h-3.5" />
-              <span>Advanced Scanner View</span>
+              <span>Advanced Scanner</span>
             </button>
           </div>
 
           <div className="text-[11px] text-slate-400">
             {viewMode === 'advisor'
-              ? '✨ Showing simplified 3-step recommendations & top 5 cards'
-              : '🔧 Showing full universe rankings, technical scores & filters'}
+              ? '✨ Showing simplified 3-step grid recommendations'
+              : viewMode === 'funding_farm'
+              ? '⚡ Delta-neutral cross-perp funding arbitrage & tweet verification'
+              : '🔧 Full universe rankings, technical scores & filters'}
           </div>
         </div>
 
-        {viewMode === 'advisor' ? (
+        {viewMode === 'funding_farm' ? (
+          /* Funding Farming Advisor */
+          <FundingFarm />
+        ) : viewMode === 'advisor' ? (
           /* Simple Grid Advisor View */
           <GridAdvisor
             markets={rawMarkets}
