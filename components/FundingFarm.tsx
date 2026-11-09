@@ -281,7 +281,7 @@ export const FundingFarm: React.FC = () => {
   const [selectedVenues, setSelectedVenues] = useState<string[]>(() =>
     PERPS_STUDY_19_VENUES.map((v) => v.displayName)
   );
-  const [venueMatchMode, setVenueMatchMode] = useState<'both' | 'any'>('any');
+  const [venueMatchMode, setVenueMatchMode] = useState<'both' | 'any'>('both');
 
   // Step 2: User Settings
   const [capitalUsd, setCapitalUsd] = useState<number>(1000);
@@ -1851,14 +1851,32 @@ Verified by GridScout · strictly read-only`;
                         {selectedVenues.length} / {PERPS_STUDY_19_VENUES.length} selected
                       </span>
 
-                      <button
-                        type="button"
-                        onClick={() => saveVenues(selectedVenues, venueMatchMode === 'both' ? 'any' : 'both')}
-                        className="px-2 py-0.5 rounded text-[10px] font-semibold bg-dark-800 hover:bg-dark-750 text-slate-300 border border-dark-700 transition-colors"
-                        title="Toggle strict pair matching (both legs in your list) vs flexible (at least one leg)"
-                      >
-                        {venueMatchMode === 'both' ? 'Strict (Both Legs)' : 'Flexible (≥1 Leg)'}
-                      </button>
+                      <div className="flex items-center space-x-1 bg-dark-850 p-0.5 rounded-lg border border-dark-750">
+                        <button
+                          type="button"
+                          onClick={() => saveVenues(selectedVenues, 'both')}
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all ${
+                            venueMatchMode === 'both'
+                              ? 'bg-emerald-600 text-white shadow-sm'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                          title="Strict: Show ONLY opportunities where BOTH legs are within your selected DEXes. Unselected venues will never appear."
+                        >
+                          Strict (Both Legs)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => saveVenues(selectedVenues, 'any')}
+                          className={`px-2 py-0.5 rounded text-[10px] font-bold transition-all ${
+                            venueMatchMode === 'any'
+                              ? 'bg-emerald-600 text-white shadow-sm'
+                              : 'text-slate-400 hover:text-white'
+                          }`}
+                          title="Flexible: Show opportunities where AT LEAST ONE leg is within your selected DEXes."
+                        >
+                          Flexible (≥1 Leg)
+                        </button>
+                      </div>
                     </div>
 
                     <div className="flex items-center space-x-2 text-xs font-semibold">
