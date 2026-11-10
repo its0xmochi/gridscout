@@ -231,9 +231,14 @@ export function formatUsdShort(val?: number): string {
   return `$${val.toFixed(0)}`;
 }
 
+export function formatInt(val?: number): string {
+  if (val === undefined || val === null || isNaN(val)) return '0';
+  return Math.round(val).toLocaleString('en-US');
+}
+
 export function formatTokenPrice(px?: number): string {
   if (px === undefined || px === null || isNaN(px)) return '—';
-  if (px >= 1000) return `$${px.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  if (px >= 1000) return `$${px.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   if (px >= 1) return `$${px.toFixed(4)}`;
   return `$${px.toFixed(6)}`;
 }
@@ -945,8 +950,8 @@ Verified by GridScout · strictly read-only`;
                       <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
                       <span>Live Data Recommendation</span>
                     </div>
-                    <p className="text-[11px] text-slate-400 mt-0.5">
-                      Weaker book: <strong className="text-slate-200">{weakerVenue}</strong> (OI: {formatUsdShort(weakerOi)}) • Max safe ceiling: <strong className="text-emerald-400">~${maxSafeCapital.toLocaleString()} Margin</strong> (≤2% OI)
+                    <p className="text-[11px] text-slate-400 mt-0.5" suppressHydrationWarning>
+                      Weaker book: <strong className="text-slate-200">{weakerVenue}</strong> (OI: {formatUsdShort(weakerOi)}) • Max safe ceiling: <strong className="text-emerald-400">~${formatInt(maxSafeCapital)} Margin</strong> (≤2% OI)
                     </p>
                   </div>
                   <button
@@ -970,7 +975,7 @@ Verified by GridScout · strictly read-only`;
                         <HelpCircle className="w-3.5 h-3.5 text-slate-500" />
                       </Tooltip>
                     </label>
-                    <span className="font-mono text-sm font-bold text-white">${capitalUsd.toLocaleString()}</span>
+                    <span className="font-mono text-sm font-bold text-white" suppressHydrationWarning>${formatInt(capitalUsd)}</span>
                   </div>
                   <div className="flex items-center space-x-2">
                     <div className="relative flex-1">
@@ -1021,8 +1026,8 @@ Verified by GridScout · strictly read-only`;
                       ))}
                     </div>
                   </div>
-                  <p className="text-[10px] text-slate-400 mt-1">
-                    Allocates ${Math.round(capitalUsd / 2).toLocaleString()} to Long leg and ${Math.round(capitalUsd / 2).toLocaleString()} to Short leg.
+                  <p className="text-[10px] text-slate-400 mt-1" suppressHydrationWarning>
+                    Allocates ${formatInt(capitalUsd / 2)} to Long leg and ${formatInt(capitalUsd / 2)} to Short leg.
                   </p>
 
                   {/* 1-2% OI Health Bar */}
@@ -1037,10 +1042,10 @@ Verified by GridScout · strictly read-only`;
                       ) : (
                         <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
                       )}
-                      <span>
+                      <span suppressHydrationWarning>
                         {isOverSized ? (
                           <>
-                            <strong>High Slippage Warning:</strong> Your ${Math.round((capitalUsd / 2) * leverage).toLocaleString()} notional/leg is{' '}
+                            <strong>High Slippage Warning:</strong> Your ${formatInt((capitalUsd / 2) * leverage)} notional/leg is{' '}
                             <strong>{currentOiPct.toFixed(1)}% of {weakerVenue}'s OI</strong>. Exceeding 2% risks getting stuck on exit!
                           </>
                         ) : (
@@ -1059,7 +1064,7 @@ Verified by GridScout · strictly read-only`;
                         }}
                         className="px-2 py-0.5 rounded bg-amber-600 hover:bg-amber-500 text-slate-950 text-[10px] font-bold ml-2 whitespace-nowrap transition-colors"
                       >
-                        Cap at ${maxSafeCapital}
+                        Cap at ${formatInt(maxSafeCapital)}
                       </button>
                     )}
                   </div>
@@ -1429,10 +1434,10 @@ Verified by GridScout · strictly read-only`;
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                 <div className="p-3 rounded-xl bg-dark-900 border border-dark-750">
                   <span className="text-[10px] text-slate-400 block mb-0.5">Notional per Leg</span>
-                  <span className="text-sm font-bold text-white font-mono">
-                    ${Math.round(analysis.notionalPerLegUsd).toLocaleString()}
+                  <span className="text-sm font-bold text-white font-mono" suppressHydrationWarning>
+                    ${formatInt(analysis.notionalPerLegUsd)}
                   </span>
-                  <span className="text-[10px] text-slate-500 block">Total: ${Math.round(analysis.totalPositionSizeUsd).toLocaleString()}</span>
+                  <span className="text-[10px] text-slate-500 block" suppressHydrationWarning>Total: ${formatInt(analysis.totalPositionSizeUsd)}</span>
                 </div>
 
                 <div className="p-3 rounded-xl bg-dark-900 border border-dark-750">
@@ -1695,8 +1700,8 @@ Verified by GridScout · strictly read-only`;
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <div className="rounded-2xl bg-dark-850 border border-dark-700 p-4 shadow-lg">
               <span className="text-[11px] font-semibold text-slate-400 block mb-1">Total Margin Deployed</span>
-              <div className="text-2xl font-extrabold text-white font-mono tracking-tight">
-                ${activeFarmStats.totalCap.toLocaleString()}
+              <div className="text-2xl font-extrabold text-white font-mono tracking-tight" suppressHydrationWarning>
+                ${formatInt(activeFarmStats.totalCap)}
               </div>
               <span className="text-[10px] text-slate-500 block mt-0.5">{activeFarms.length} Active Positions</span>
             </div>
@@ -1792,8 +1797,8 @@ Verified by GridScout · strictly read-only`;
                           <span className="text-xs px-2 py-0.5 rounded bg-dark-750 text-slate-300 font-bold border border-dark-600">
                             {farm.leverage}x Leverage
                           </span>
-                          <span className="text-xs font-mono text-slate-400">
-                            Allocated: ${farm.capitalUsd.toLocaleString()}
+                          <span className="text-xs font-mono text-slate-400" suppressHydrationWarning>
+                            Allocated: ${formatInt(farm.capitalUsd)}
                           </span>
                         </div>
 
@@ -1868,7 +1873,7 @@ Verified by GridScout · strictly read-only`;
                             rel="noopener noreferrer"
                             className="text-emerald-400 hover:underline flex items-center gap-1 font-semibold"
                           >
-                            <span>Long: {farm.longVenue} (${Math.round(farm.notionalPerLegUsd).toLocaleString()})</span>
+                            <span suppressHydrationWarning>Long: {farm.longVenue} (${formatInt(farm.notionalPerLegUsd)})</span>
                             <ExternalLink className="w-3 h-3" />
                           </a>
                           <span className="text-slate-600">|</span>
@@ -1878,7 +1883,7 @@ Verified by GridScout · strictly read-only`;
                             rel="noopener noreferrer"
                             className="text-red-400 hover:underline flex items-center gap-1 font-semibold"
                           >
-                            <span>Short: {farm.shortVenue} (${Math.round(farm.notionalPerLegUsd).toLocaleString()})</span>
+                            <span suppressHydrationWarning>Short: {farm.shortVenue} (${formatInt(farm.notionalPerLegUsd)})</span>
                             <ExternalLink className="w-3 h-3" />
                           </a>
                         </div>
@@ -1942,7 +1947,7 @@ Verified by GridScout · strictly read-only`;
                           <td className="py-2.5 text-slate-300">
                             {cf.longVenue} (Long) → {cf.shortVenue} (Short)
                           </td>
-                          <td className="py-2.5 font-mono text-slate-400">${cf.capitalUsd.toLocaleString()}</td>
+                          <td className="py-2.5 font-mono text-slate-400" suppressHydrationWarning>${formatInt(cf.capitalUsd)}</td>
                           <td className="py-2.5 text-slate-400">
                             {durationHours >= 24 ? `${(durationHours / 24).toFixed(1)} days` : `${durationHours.toFixed(1)} hrs`}
                           </td>
