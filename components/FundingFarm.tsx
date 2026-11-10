@@ -13,6 +13,7 @@ import {
   VENUE_REGISTRY,
   PERPS_STUDY_19_VENUES,
   DexVenueConfig,
+  normalizeFundingToHourly,
 } from '../lib/analytics/funding-farm';
 import {
   ShieldCheck,
@@ -248,6 +249,20 @@ export function getVenueUrl(venueNameOrId: string, asset: string): string {
   return `https://www.google.com/search?q=${encodeURIComponent(venueNameOrId + ' perp dex trade ' + asset)}`;
 }
 
+export function inferAssetCategory(asset: string): 'crypto' | 'rwa' | 'fx' | 'commodity' {
+  const sym = asset.toUpperCase();
+  if (['XAU', 'XAG', 'GOLD', 'SILVER', 'NATGAS', 'OIL', 'WTI', 'BRENT', 'COPPER', 'PALLADIUM', 'XPD'].some((c) => sym.includes(c))) {
+    return 'commodity';
+  }
+  if (['EUR', 'GBP', 'JPY', 'AUD', 'CAD', 'CHF', 'USD'].some((c) => sym.includes(c))) {
+    return 'fx';
+  }
+  if (['SPX', 'NDX', 'DJI', 'SPY', 'QQQ', 'NVDA', 'AAPL', 'TSLA', 'AMZN', 'MSFT', 'META', 'GOOGL', 'RDDT', 'ICE', 'SHAZ', 'CIFR', 'EWZ', 'MU', 'ARM', 'INTC', 'TTWO', 'QCOM', 'SKHYNIX', 'SOXL'].some((c) => sym.includes(c))) {
+    return 'rwa';
+  }
+  return 'crypto';
+}
+
 export const FundingFarm: React.FC = () => {
   // Main Navigation: Scanner/Advisor vs My Active Farms Tracker
   const [mainTab, setMainTab] = useState<'advisor' | 'tracker'>('advisor');
@@ -260,6 +275,7 @@ export const FundingFarm: React.FC = () => {
 
   // Opportunities & Data
   const [opportunities, setOpportunities] = useState<FundingArbOpportunity[]>(SAMPLE_FUNDING_OPPORTUNITIES);
+  const [rawAssets, setRawAssets] = useState<Record<string, any[]>>({});
   const [loading, setLoading] = useState<boolean>(true);
   const [refreshing, setRefreshing] = useState<boolean>(false);
   const [selectedOppId, setSelectedOppId] = useState<string>(SAMPLE_FUNDING_OPPORTUNITIES[0].id);
@@ -417,6 +433,9 @@ export const FundingFarm: React.FC = () => {
       const data = await res.json();
       if (data.success && data.opportunities && data.opportunities.length > 0) {
         setOpportunities(data.opportunities);
+        if (data.rawAssets && Object.keys(data.rawAssets).length > 0) {
+          setRawAssets(data.rawAssets);
+        }
         if (!selectedOppId || !data.opportunities.some((o: FundingArbOpportunity) => o.id === selectedOppId)) {
           setSelectedOppId(data.opportunities[0].id);
         }
@@ -481,9 +500,140 @@ export const FundingFarm: React.FC = () => {
     venueMatchMode,
   ]);
 
+  // Dynamic venue-aware opportunity pool from rawAssets
+  const dynamicOpportunities = useMemo<FundingArbOpportunity[]>(() => {
+    if (rawAssets && Object.keys(rawAssets).length > 0 && selectedVenues.length < PERPS_STUDY_19_VENUES.length && selectedVenues.length >= 2) {
+      const results: FundingArbOpportunity[] = [];
+
+      for (const [rawAssetStr, venues] of Object.entries(rawAssets)) {
+        if (!Array.isArray(venues)) continue;
+        const matching = venues.filter((v) => v && v.v && isVenueSelected(v.vn || v.v));
+        if (matching.length < 2) continue;
+
+        let bestSpread = -Infinity;
+        let bestLong: any = null;
+        let bestShort: any = null;
+
+        for (let i = 0; i < matching.length; i++) {
+          for (let j = 0; j < matching.length; j++) {
+            if (i === j) continue;
+            const l = matching[i];
+            const s = matching[j];
+            const spread = (Number(s.apr) || 0) - (Number(l.apr) || 0);
+            if (spread > bestSpread) {
+              bestSpread = spread;
+              bestLong = l;
+              bestShort = s;
+            }
+          }
+        }
+
+        if (bestSpread > 0 && bestLong && bestShort) {
+          const asset = rawAssetStr.toUpperCase();
+          const category = inferAssetCategory(asset);
+          const longV = String(bestLong.v || '').toLowerCase();
+          const shortV = String(bestShort.v || '').toLowerCase();
+          const longApr = Number(bestLong.apr) || 0;
+          const shortApr = Number(bestShort.apr) || 0;
+          const longInterval = Number(bestLong.ih) || 1;
+          const shortInterval = Number(bestShort.ih) || 1;
+
+          const longPx = Number(bestLong.px) || undefined;
+          const shortPx = Number(bestShort.px) || undefined;
+          const longVol = Number(bestLong.vol) || undefined;
+          const shortVol = Number(bestShort.vol) || undefined;
+          const longOi = Number(bestLong.oi) || undefined;
+          const shortOi = Number(bestShort.oi) || undefined;
+
+          let priceSpreadPct: number | undefined = undefined;
+          if (longPx && shortPx && longPx > 0) {
+            priceSpreadPct = ((shortPx - longPx) / longPx) * 100;
+          }
+          const priceSpreadBps = priceSpreadPct !== undefined ? Math.abs(priceSpreadPct * 100) : 3.5;
+
+          const longIv: Record<string, number> = {};
+          if (bestLong.iv) {
+            Object.entries(bestLong.iv).forEach(([k, v]: [string, any]) => {
+              if (Array.isArray(v)) longIv[k] = v[0];
+            });
+          }
+          const shortIv: Record<string, number> = {};
+          if (bestShort.iv) {
+            Object.entries(bestShort.iv).forEach(([k, v]: [string, any]) => {
+              if (Array.isArray(v)) shortIv[k] = v[0];
+            });
+          }
+
+          let spread24h: number | undefined = undefined;
+          if (typeof shortIv['24h'] === 'number' && typeof longIv['24h'] === 'number') {
+            spread24h = shortIv['24h'] - longIv['24h'];
+          }
+
+          const isSpike = (bestSpread >= 30 && typeof spread24h === 'number' && spread24h <= 10) || bestSpread > 300;
+
+          const pointsVenues: string[] = [];
+          if (VENUE_REGISTRY[longV]?.hasPointsProgram) pointsVenues.push(VENUE_REGISTRY[longV].name);
+          if (VENUE_REGISTRY[shortV]?.hasPointsProgram) pointsVenues.push(VENUE_REGISTRY[shortV].name);
+
+          results.push({
+            id: `dyn_${asset}_${longV}_${shortV}`,
+            asset,
+            category,
+            longLeg: {
+              venueId: longV,
+              venueName: bestLong.vn || longV,
+              symbol: bestLong.sym || `${asset}-PERP`,
+              side: 'long',
+              rawApr: longApr,
+              intervalHours: longInterval,
+              normalizedHourlyPct: normalizeFundingToHourly(longApr, longInterval),
+              markPrice: longPx,
+              openInterestUsd: longOi,
+              volume24hUsd: longVol,
+              intervalAprs: Object.keys(longIv).length > 0 ? longIv : undefined,
+              stale: !!bestLong.stale,
+            },
+            shortLeg: {
+              venueId: shortV,
+              venueName: bestShort.vn || shortV,
+              symbol: bestShort.sym || `${asset}-PERP`,
+              side: 'short',
+              rawApr: shortApr,
+              intervalHours: shortInterval,
+              normalizedHourlyPct: normalizeFundingToHourly(shortApr, shortInterval),
+              markPrice: shortPx,
+              openInterestUsd: shortOi,
+              volume24hUsd: shortVol,
+              intervalAprs: Object.keys(shortIv).length > 0 ? shortIv : undefined,
+              stale: !!bestShort.stale,
+            },
+            grossSpreadApr: bestSpread,
+            netHourlyYieldPct: normalizeFundingToHourly(bestSpread, 1),
+            priceSpreadBps,
+            priceSpreadPct,
+            sustainabilityScore: isSpike ? 30 : 90,
+            sustainabilityBadge: isSpike ? 'Spike Trap' : 'High',
+            pointsEligible: pointsVenues.length > 0,
+            pointsVenues,
+            totalOiUsd: (longOi || 0) + (shortOi || 0),
+            totalVolume24hUsd: (longVol || 0) + (shortVol || 0),
+            lastUpdated: Date.now(),
+          });
+        }
+      }
+
+      if (results.length > 0) {
+        results.sort((a, b) => b.grossSpreadApr - a.grossSpreadApr);
+        return results;
+      }
+    }
+
+    return opportunities;
+  }, [opportunities, rawAssets, selectedVenues]);
+
   // Filtered and Sorted opportunities list
   const filteredOpps = useMemo(() => {
-    return opportunities
+    return dynamicOpportunities
       .filter((o) => {
         if (categoryFilter !== 'all' && o.category !== categoryFilter) return false;
         if (onlyPoints && !o.pointsEligible) return false;
@@ -492,12 +642,11 @@ export const FundingFarm: React.FC = () => {
         const effSpread = getSpreadForTimeframe(o, timeframeFilter);
         if (minAprFilter > 0 && effSpread < minAprFilter) return false;
 
-        // Min 24h Volume filter
+        // Min 24h Volume filter (Each leg)
         if (minVolumeFilter > 0) {
           const lVol = o.longLeg.volume24hUsd || 0;
           const sVol = o.shortLeg.volume24hUsd || 0;
-          const totVol = o.totalVolume24hUsd || (lVol + sVol);
-          if (totVol < minVolumeFilter && (lVol < minVolumeFilter || sVol < minVolumeFilter)) {
+          if (lVol < minVolumeFilter || sVol < minVolumeFilter) {
             return false;
           }
         }
@@ -541,7 +690,7 @@ export const FundingFarm: React.FC = () => {
         return spreadB - spreadA;
       });
   }, [
-    opportunities,
+    dynamicOpportunities,
     categoryFilter,
     onlyPoints,
     minAprFilter,
@@ -618,6 +767,43 @@ export const FundingFarm: React.FC = () => {
     customShortVenue,
     customShortApr,
   ]);
+
+  // Weaker Leg Liquidity & Sizing calculations (1-2% OI Rule)
+  const weakerOi = useMemo(() => {
+    const lOi = activeOpp.longLeg.openInterestUsd;
+    const sOi = activeOpp.shortLeg.openInterestUsd;
+    if (lOi && sOi) return Math.min(lOi, sOi);
+    return lOi || sOi || 250000;
+  }, [activeOpp]);
+
+  const weakerVenue = useMemo(() => {
+    const lOi = activeOpp.longLeg.openInterestUsd || 0;
+    const sOi = activeOpp.shortLeg.openInterestUsd || 0;
+    if (lOi && sOi) {
+      return lOi <= sOi ? activeOpp.longLeg.venueName : activeOpp.shortLeg.venueName;
+    }
+    return activeOpp.longLeg.venueName;
+  }, [activeOpp]);
+
+  // Max safe capital: 2% of weaker leg's OI in notional size.
+  // Notional per leg = (capital / 2) * leverage.
+  // Capital = (maxSafeNotional * 2) / leverage.
+  const maxSafeNotional = Math.round(weakerOi * 0.02);
+  const maxSafeCapital = Math.max(100, Math.round((maxSafeNotional * 2) / Math.max(1, leverage)));
+  const currentNotionalPerLeg = (capitalUsd / 2) * leverage;
+  const currentOiPct = (currentNotionalPerLeg / Math.max(1, weakerOi)) * 100;
+  const isOverSized = currentOiPct > 2.0;
+
+  const handleApplyAutoTune = () => {
+    const safeCap = Math.max(200, Math.min(5000, maxSafeCapital));
+    setCapitalUsd(safeCap);
+    setCapitalStr(safeCap.toString());
+    setLeverage(2);
+    setLeverageStr('2');
+    setFeeTier('maker_taker_blend');
+    const isSpike = isOppSpikeTrap(activeOpp);
+    setHoldingDays(isSpike ? 1 : 7);
+  };
 
   // Run Master Analytics Engine
   const analysis = useMemo<FarmAnalysis>(() => {
@@ -751,6 +937,29 @@ Verified by GridScout · strictly read-only`;
                 <span className="text-[11px] text-slate-400">Isolated Margin</span>
               </div>
 
+              {/* LIVE LIQUIDITY ADVISOR & 1-CLICK AUTO-TUNE */}
+              <div className="p-3 rounded-xl bg-dark-900 border border-emerald-500/30 space-y-2">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                  <div>
+                    <div className="flex items-center space-x-1.5 text-xs font-bold text-white">
+                      <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                      <span>Live Data Recommendation</span>
+                    </div>
+                    <p className="text-[11px] text-slate-400 mt-0.5">
+                      Weaker book: <strong className="text-slate-200">{weakerVenue}</strong> (OI: {formatUsdShort(weakerOi)}) • Max safe ceiling: <strong className="text-emerald-400">~${maxSafeCapital.toLocaleString()} Margin</strong> (≤2% OI)
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleApplyAutoTune}
+                    className="px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-600 hover:bg-emerald-500 text-white shadow-md shadow-emerald-950/40 flex items-center justify-center space-x-1 shrink-0 transition-all active:scale-95"
+                  >
+                    <Sparkles className="w-3 h-3" />
+                    <span>Auto-Tune Safe Settings</span>
+                  </button>
+                </div>
+              </div>
+
               <div className="space-y-4">
                 {/* Capital USD */}
                 <div>
@@ -815,6 +1024,45 @@ Verified by GridScout · strictly read-only`;
                   <p className="text-[10px] text-slate-400 mt-1">
                     Allocates ${Math.round(capitalUsd / 2).toLocaleString()} to Long leg and ${Math.round(capitalUsd / 2).toLocaleString()} to Short leg.
                   </p>
+
+                  {/* 1-2% OI Health Bar */}
+                  <div className={`mt-2 p-2 rounded-lg text-[11px] flex items-center justify-between ${
+                    isOverSized
+                      ? 'bg-amber-950/60 text-amber-300 border border-amber-800/60'
+                      : 'bg-emerald-950/40 text-emerald-300 border border-emerald-800/40'
+                  }`}>
+                    <div className="flex items-center space-x-1.5">
+                      {isOverSized ? (
+                        <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                      ) : (
+                        <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                      )}
+                      <span>
+                        {isOverSized ? (
+                          <>
+                            <strong>High Slippage Warning:</strong> Your ${Math.round((capitalUsd / 2) * leverage).toLocaleString()} notional/leg is{' '}
+                            <strong>{currentOiPct.toFixed(1)}% of {weakerVenue}'s OI</strong>. Exceeding 2% risks getting stuck on exit!
+                          </>
+                        ) : (
+                          <>
+                            <strong>Safe Liquidity:</strong> Position is <strong>{currentOiPct.toFixed(1)}% of {weakerVenue} OI</strong> (safe 1-2% rule).
+                          </>
+                        )}
+                      </span>
+                    </div>
+                    {isOverSized && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCapitalUsd(maxSafeCapital);
+                          setCapitalStr(maxSafeCapital.toString());
+                        }}
+                        className="px-2 py-0.5 rounded bg-amber-600 hover:bg-amber-500 text-slate-950 text-[10px] font-bold ml-2 whitespace-nowrap transition-colors"
+                      >
+                        Cap at ${maxSafeCapital}
+                      </button>
+                    )}
+                  </div>
                 </div>
 
                 {/* Leverage (Expanded up to 10x / 20x) */}
@@ -1937,7 +2185,7 @@ Verified by GridScout · strictly read-only`;
                   {/* MIN 24H VOLUME */}
                   <div className="flex items-center space-x-2">
                     <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wide">
-                      MIN 24H VOLUME:
+                      MIN 24H VOLUME <span className="text-[10px] text-slate-500 font-normal">Each leg</span>:
                     </span>
                     <div className="flex items-center space-x-1 bg-dark-900 p-1 rounded-xl border border-dark-750">
                       {[

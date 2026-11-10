@@ -13,6 +13,7 @@ export const revalidate = 60; // 60s cache
 // In-memory cache for fast responses
 let cachedArbs: FundingArbOpportunity[] | null = null;
 let cachedVenues: any[] | null = null;
+let cachedAssets: Record<string, any[]> | null = null;
 let lastCacheTime = 0;
 const CACHE_TTL_MS = 60 * 1000;
 
@@ -72,6 +73,7 @@ export async function GET() {
       count: cachedArbs.length,
       venues: cachedVenues || PERPS_STUDY_19_VENUES,
       opportunities: cachedArbs,
+      rawAssets: cachedAssets || {},
       cached: true,
       lastUpdated: lastCacheTime,
     });
@@ -210,6 +212,7 @@ export async function GET() {
 
         cachedArbs = parsed;
         cachedVenues = upstreamVenues;
+        cachedAssets = assetsMap;
         lastCacheTime = now;
 
         return NextResponse.json({
@@ -217,6 +220,7 @@ export async function GET() {
           count: parsed.length,
           venues: upstreamVenues,
           opportunities: parsed,
+          rawAssets: assetsMap,
           cached: false,
           lastUpdated: now,
         });
