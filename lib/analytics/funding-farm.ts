@@ -491,8 +491,14 @@ export function analyzeFundingFarm(
 
   const totalRoundTripFeesUsd = longEntryFeeUsd + longExitFeeUsd + shortEntryFeeUsd + shortExitFeeUsd;
 
-  // Price spread drag (if mark prices diverge at entry, convergence can cost up to the spread)
-  const priceSpreadDragUsd = notionalPerLegUsd * (Math.max(0, opp.priceSpreadBps) / 10000);
+  // Price spread drag:
+  // Only adverse divergence (shortPx < longPx, i.e., priceSpreadPct < 0) creates entry/convergence drag.
+  // When shortPx >= longPx (priceSpreadPct >= 0), you short higher and long lower, so convergence is favorable (0 drag).
+  const adverseSpreadBps =
+    opp.priceSpreadPct !== undefined
+      ? Math.max(0, -opp.priceSpreadPct * 100)
+      : Math.max(0, opp.priceSpreadBps);
+  const priceSpreadDragUsd = notionalPerLegUsd * (adverseSpreadBps / 10000);
   const totalEntryExitFrictionUsd = totalRoundTripFeesUsd + priceSpreadDragUsd;
 
   const totalFrictionBps = (totalEntryExitFrictionUsd / notionalPerLegUsd) * 10000;
@@ -576,16 +582,33 @@ export function analyzeFundingFarm(
   });
 
   // Check 4: Price Basis / Spread Risk
-  const priceSpreadStatus = opp.priceSpreadBps <= 25 ? 'pass' : opp.priceSpreadBps <= 60 ? 'warning' : 'fail';
+  const hasFavorableSpread = opp.priceSpreadPct !== undefined && opp.priceSpreadPct >= 0;
+  const priceSpreadStatus = hasFavorableSpread
+    ? 'pass'
+    : adverseSpreadBps <= 25
+    ? 'pass'
+    : adverseSpreadBps <= 60
+    ? 'warning'
+    : 'fail';
   checklist.push({
     id: 'price_basis',
     title: 'Entry Price Basis (Venue Price Gap)',
     status: priceSpreadStatus,
-    badge: `${opp.priceSpreadBps.toFixed(1)} bps (${(opp.priceSpreadBps / 100).toFixed(2)}%)`,
-    value: priceSpreadDragUsd > 0 ? `~$${priceSpreadDragUsd.toFixed(2)} drag on entry` : 'Parity (0 drag)',
-    explanation: opp.priceSpreadBps <= 25
+    badge:
+      opp.priceSpreadPct !== undefined
+        ? `${opp.priceSpreadPct >= 0 ? '+' : ''}${opp.priceSpreadPct.toFixed(3)}%`
+        : `${opp.priceSpreadBps.toFixed(1)} bps (${(opp.priceSpreadBps / 100).toFixed(2)}%)`,
+    value:
+      priceSpreadDragUsd > 0
+        ? `~$${priceSpreadDragUsd.toFixed(2)} drag on entry`
+        : hasFavorableSpread
+        ? `+$${(notionalPerLegUsd * ((opp.priceSpreadPct || 0) / 100)).toFixed(2)} favorable entry edge`
+        : 'Parity (0 drag)',
+    explanation: hasFavorableSpread
+      ? 'Short venue price is higher than Long venue — you enter with a favorable price basis discount.'
+      : adverseSpreadBps <= 25
       ? 'Prices on both venues are closely anchored. Negligible convergence drag.'
-      : 'Entry prices differ between venues. Price convergence will deduct from early funding yield.',
+      : 'Short venue is cheaper than Long venue. Price convergence will deduct from early funding yield.',
     tweetRuleQuote: 'Prices on both exchanges must be close — if there\'s a big price spread between venues, your entry will eat into profits before funding even kicks in.',
   });
 
