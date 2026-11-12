@@ -479,14 +479,16 @@ export const FundingFarm: React.FC = () => {
     return opp.grossSpreadApr;
   };
 
-  // Spike Trap Detector: live spread is high but 24h average is negative/low or collapsing
+  // Spike Trap Detector: live spread is high while 24h average is negative/tiny, or extreme >=4x flash spike
   const isOppSpikeTrap = (opp: FundingArbOpportunity): boolean => {
     if (opp.sustainabilityBadge === 'Spike Trap') return true;
     const spread24h = getSpreadForTimeframe(opp, '24h');
     // High live spread (>= 30%) but 24h average is non-positive or very low (<= 10%)
     if (opp.grossSpreadApr >= 30 && spread24h <= 10) return true;
-    // Flash spike: live rate is 2.5x higher than 24h average
-    if (opp.grossSpreadApr >= 50 && spread24h > 0 && opp.grossSpreadApr >= spread24h * 2.5) return true;
+    // Extreme live spread (>= 100%) with weak 24h average (< 25%)
+    if (opp.grossSpreadApr >= 100 && spread24h < 25) return true;
+    // Flash spike: live rate is >= 4x higher than 24h average
+    if (opp.grossSpreadApr >= 50 && spread24h > 0 && opp.grossSpreadApr >= spread24h * 4) return true;
     return false;
   };
 
@@ -574,7 +576,10 @@ export const FundingFarm: React.FC = () => {
             spread24h = shortIv['24h'] - longIv['24h'];
           }
 
-          const isSpike = (bestSpread >= 30 && typeof spread24h === 'number' && spread24h <= 10) || bestSpread > 300;
+          const isSpike =
+            (bestSpread >= 30 && typeof spread24h === 'number' && spread24h <= 10) ||
+            (bestSpread >= 100 && (typeof spread24h !== 'number' || spread24h < 25)) ||
+            (bestSpread >= 50 && typeof spread24h === 'number' && spread24h > 0 && bestSpread >= spread24h * 4);
 
           const pointsVenues: string[] = [];
           if (VENUE_REGISTRY[longV]?.hasPointsProgram) pointsVenues.push(VENUE_REGISTRY[longV].name);

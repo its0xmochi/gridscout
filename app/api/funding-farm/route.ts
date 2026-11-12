@@ -48,15 +48,21 @@ function calculateSustainability(
     if (spreadApr >= 30 && spread24h <= 10) {
       return { score: 25, badge: 'Spike Trap' };
     }
-    if (spreadApr >= 50 && spread24h > 0 && spreadApr >= spread24h * 2.5) {
+    if (spreadApr >= 100 && spread24h < 25) {
+      return { score: 35, badge: 'Spike Trap' };
+    }
+    if (spreadApr >= 50 && spread24h > 0 && spreadApr >= spread24h * 4) {
       return { score: 40, badge: 'Spike Trap' };
     }
+    if (spreadApr > 150) {
+      return { score: isBlueChip ? 80 : 70, badge: 'Moderate' };
+    }
+  } else if (spreadApr > 300) {
+    // Extreme spreads without 24h backing are likely transient 1-hour spikes
+    return { score: 45, badge: 'Spike Trap' };
   }
 
-  if (spreadApr > 300) {
-    // Extreme spreads are almost always transient 1-hour spikes
-    return { score: 45, badge: 'Spike Trap' };
-  } else if (spreadApr > 150) {
+  if (spreadApr > 150) {
     return { score: isBlueChip ? 75 : 58, badge: isBlueChip ? 'Moderate' : 'Spike Trap' };
   } else if (spreadApr >= 20) {
     return { score: isBlueChip ? 92 : 82, badge: 'High' };
